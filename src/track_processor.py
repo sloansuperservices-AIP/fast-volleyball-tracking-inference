@@ -149,23 +149,71 @@ class TrackProcessor:
 
                 clean_frame = frame.copy()
 
-                # Draw annotations
-                for pos in track.positions:
-                    px, py, pf = int(pos[0][0]), int(pos[0][1]), pos[1]
+                # Draw tail (trajectory)
+                tail_length = 15  # Number of frames to show in the tail
+
+                # Get current and recent positions
+                current_positions = [
+                    pos for pos in track.positions
+                    if pos[1] <= frame_num and pos[1] > frame_num - tail_length
+                ]
+
+                for i, pos_data in enumerate(current_positions):
+                    pos, pf = pos_data[0], pos_data[1]
+                    px, py = int(pos[0]), int(pos[1])
+
+                    # Calculate opacity based on how old the position is
+                    # Newer positions are more opaque
+                    age = frame_num - pf
+                    alpha = max(0, 1 - (age / tail_length))
+
+                    color = (0, 255, 255)  # Yellow
+
+                    # Only draw the circle if it's visible enough
+                    if alpha > 0.1:
+                         # We can't directly draw with alpha in OpenCV without overlay
+                        overlay = frame.copy()
+                        cv2.circle(overlay, (px, py), 8, color, -1)
+                        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+                    # Highlight the current position
                     if pf == frame_num:
-                        cv2.circle(frame, (px, py), 10, (0, 255, 255), -1)
+                        cv2.circle(frame, (px, py), 10, (0, 0, 255), -1) # Red for current
+                        cv2.circle(frame, (px, py), 12, (255, 255, 255), 2) # White border
+
                         elapsed_time = (frame_num - start_frame) / fps
-                        text = f"ID:{track_id} ({px},{py}) t:{elapsed_time:.2f}s"
-                        cv2.putText(
-                            frame,
-                            text,
-                            (px + 15, py),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.5,
-                            (255, 255, 255),
-                            1,
-                            cv2.LINE_AA,
-                        )
+
+                        # Display Statistics
+                        stats_text_lines = [
+                            f"ID: {track_id}",
+                            f"Time: {elapsed_time:.2f}s",
+                            f"Speed: {track.avg_speed:.1f} px/f", # Ideally calculate instantaneous speed
+                            f"Max H: {track.max_height:.1f} px"
+                        ]
+
+                        y_offset = py - 40
+                        for line in stats_text_lines:
+                             cv2.putText(
+                                frame,
+                                line,
+                                (px + 20, y_offset),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.6,
+                                (255, 255, 255), # White text
+                                2,
+                                cv2.LINE_AA,
+                            )
+                             cv2.putText(
+                                frame,
+                                line,
+                                (px + 20, y_offset),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.6,
+                                (0, 0, 0), # Black outline
+                                1,
+                                cv2.LINE_AA,
+                            )
+                             y_offset += 20
 
                 # Interactive mode
                 if not self.output_path and not self.split_dir:
