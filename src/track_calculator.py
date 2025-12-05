@@ -88,13 +88,11 @@ class TrackCalculator:
     def _filter_short_tracks(self, episodes: List[Track]) -> List[Track]:
         """Filter, extend, merge, and clean up tracks."""
         # 1. Filter by vertical range
-        episodes = [ep for ep in episodes if ep.get_y_range() >= 1080 / 4.0]
+        # episodes = [ep for ep in episodes if ep.get_y_range() >= 1080 / 4.0]
         episodes = [self._trim_bounce_start(ep) for ep in episodes]
 
         # 2. Keep only tracks longer than minimum duration
-        long_tracks = [
-            ep for ep in episodes if ep.duration_sec() >= self.min_duration_sec
-        ]
+        long_tracks = episodes # DISABLED for debugging [ep for ep in episodes if ep.duration_sec() >= self.min_duration_sec]
         sorted_tracks = sorted(
             long_tracks, key=lambda x: x.duration_sec(), reverse=True
         )
@@ -198,6 +196,12 @@ class TrackCalculator:
             )
             episodes.append(track)
 
+        # Add remaining active tracks
+        for track_id, track in tracker.tracks.items():
+            if not track.positions:
+                continue
+            episodes.append(track)
+
         self.tracks = self._filter_short_tracks(episodes)
 
     def _save_tracks_to_json(self) -> None:
@@ -208,6 +212,7 @@ class TrackCalculator:
         os.makedirs(tracks_dir, exist_ok=True)
 
         for track in self.tracks:
+            track.calculate_stats()  # Calculate statistics before saving
             file_path = os.path.join(tracks_dir, f"track_{track.track_id:04d}.json")
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(track.to_dict(), f, indent=2, ensure_ascii=False)
