@@ -16,7 +16,18 @@ def parse_args():
         description="Volleyball ball detection and tracking with ONNX"
     )
     parser.add_argument(
-        "--video_path", type=str, required=True, help="Path to input video file"
+        "--video_path",
+        type=str,
+        required=False,
+        default=None,
+        help="Path to input video file (or use --source for live streams)",
+    )
+    parser.add_argument(
+        "--source",
+        type=str,
+        default=None,
+        help="Video source: camera index (0, 1, …), RTSP/HTTP URL, or file path. "
+             "Overrides --video_path when set.",
     )
     parser.add_argument(
         "--track_length", type=int, default=8, help="Length of the ball track"
@@ -97,15 +108,40 @@ def load_onnx_model(model_path):
 
 
 
-def initialize_video(video_path):
-    cap = cv2.VideoCapture(video_path)
+def initialize_video(source):
+    """Open any video source: file path, camera index, or RTSP/HTTP URL.
+
+    Returns (cap, frame_width, frame_height, fps, total_frames, is_live).
+    total_frames is -1 for live / streaming sources.
+    """
+    # Resolve camera index
+    if isinstance(source, str) and source.isdigit():
+        source = int(source)
+
+    is_live = isinstance(source, int) or (
+        isinstance(source, str)
+        and any(source.startswith(p) for p in ("rtsp://", "rtmp://", "http://", "https://"))
+    )
+
+    cap = cv2.VideoCapture(source)
+    if is_live:
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
     if not cap.isOpened():
-        raise ValueError(f"Could not open video file: {video_path}")
+        raise ValueError(f"Could not open video source: {source!r}")
+
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps <= 0 or fps > 240:
+        fps = 30.0
+    fps = int(fps)
+
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    return cap, frame_width, frame_height, fps, total_frames
+    if total_frames <= 0:
+        total_frames = -1  # unknown / live
+
+    return cap, frame_width, frame_height, fps, total_frames, is_live
 
 
 def setup_output_writer(
@@ -201,16 +237,27 @@ def read_frames(cap, frame_queue, max_frames):
 def main():
     args = parse_args()
     input_width, input_height = 512, 288
-    # batch_size is now determined dynamically from the model
 
-    #model_session, out_dim = load_model(args.model_path, input_height, input_width)
-    
+    # Resolve video source: --source takes priority over --video_path
+    source = args.source or args.video_path
+    if source is None:
+        print("Error: provide --video_path (file) or --source (camera / RTSP URL)")
+        return
+
     model_session, has_gru, out_dim, h0_shape, batch_size = load_onnx_model(args.model_path)
 
-    cap, frame_width, frame_height, fps, total_frames = initialize_video(
-        args.video_path
-    )
-    video_basename = os.path.splitext(os.path.basename(args.video_path))[0]
+    cap, frame_width, frame_height, fps, total_frames, is_live = initialize_video(source)
+
+    # Derive a safe basename for output dirs
+    if isinstance(source, int) or (isinstance(source, str) and source.isdigit()):
+        video_basename = f"camera_{source}"
+    elif isinstance(source, str) and any(
+        source.startswith(p) for p in ("rtsp://", "rtmp://", "http://", "https://")
+    ):
+        video_basename = "stream_" + source.split("/")[-1].split("?")[0] or "stream"
+    else:
+        video_basename = os.path.splitext(os.path.basename(source))[0]
+
     out_writer, _ = setup_output_writer(
         video_basename, args.output_dir, frame_width, frame_height, fps, args.only_csv
     )
@@ -219,30 +266,48 @@ def main():
     frame_buffer = deque(maxlen=batch_size)
     track_points = deque(maxlen=args.track_length)
     frame_index = 0
-    frame_queue = queue.Queue(maxsize=2)
 
-    # Start frame reading thread
+    # For live sources keep the queue shallow so we always process fresh frames
+    queue_depth = 2 if is_live else 4
+    frame_queue = queue.Queue(maxsize=queue_depth)
+
     def frame_reader():
         while cap.isOpened():
-            read_frames(cap, frame_queue, batch_size)
+            frames = []
+            while len(frames) < batch_size:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                frames.append(frame)
+            if frames:
+                if is_live and frame_queue.full():
+                    try:
+                        frame_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                frame_queue.put(frames)
+            else:
+                frame_queue.put(None)
+                break
 
     reader_thread = threading.Thread(target=frame_reader, daemon=True)
     reader_thread.start()
 
-    pbar = tqdm(total=total_frames, desc="Processing video", unit="frame")
+    # tqdm: use None total for live/unknown-length streams
+    pbar_total = total_frames if total_frames > 0 else None
+    pbar = tqdm(total=pbar_total, desc="Processing video", unit="frame")
+
     exit_flag = False
     while True:
         start_time = time.time()
 
-        # Get batch of frames
         frames = frame_queue.get()
         if frames is None:
             break
 
-        # Preprocess frames in batch
         processed_frames = preprocess_frames(frames, input_height, input_width)
 
-        # Fill buffer if not enough frames
+        # Fill buffer on the very first batch
         while len(frame_buffer) < batch_size:
             frame_buffer.append(
                 processed_frames[0]
@@ -250,25 +315,21 @@ def main():
                 else np.zeros((input_height, input_width), dtype=np.float32)
             )
 
-        # Update buffer with new frames
         for pf in processed_frames:
             frame_buffer.append(pf)
 
-        # Prepare input tensor
-        input_tensor = np.stack(frame_buffer, axis=2)  # (height, width, seq_len)
-        input_tensor = np.expand_dims(input_tensor, axis=0)  # (1, height, width, seq_len)
-        input_tensor = np.transpose(input_tensor, (0, 3, 1, 2))  # (1, seq_len, 288, 512)
+        # Prepare input tensor: (1, seq_len, H, W)
+        input_tensor = np.stack(frame_buffer, axis=2)          # (H, W, T)
+        input_tensor = np.expand_dims(input_tensor, axis=0)    # (1, H, W, T)
+        input_tensor = np.transpose(input_tensor, (0, 3, 1, 2))  # (1, T, H, W)
 
-        # Run inference
         inputs = {model_session.get_inputs()[0].name: input_tensor}
         output = model_session.run(None, inputs)[0]
 
-        # Process predictions for all frames
         predictions = postprocess_output(
             output, input_height=input_height, input_width=input_width, out_dim=out_dim
         )
 
-        # Save results and visualize for each frame in the batch
         for i, (visibility, x, y) in enumerate(predictions[: len(frames)]):
             x_orig = x * frame_width / input_width if visibility else -1
             y_orig = y * frame_height / input_height if visibility else -1
@@ -294,16 +355,18 @@ def main():
                     cv2.namedWindow("Ball Tracking", cv2.WINDOW_NORMAL)
                     cv2.imshow("Ball Tracking", vis_frame)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
-                        exit_flag = True  # Set flag to exit
+                        exit_flag = True
                         break
                 if out_writer is not None:
                     out_writer.write(vis_frame)
+
         if exit_flag:
             break
 
         end_time = time.time()
         batch_time = end_time - start_time
         batch_fps = len(frames) / batch_time if batch_time > 0 else 0
+        pbar.set_postfix(fps=f"{batch_fps:.0f}")
         pbar.update(len(frames))
         frame_index += len(frames)
 
