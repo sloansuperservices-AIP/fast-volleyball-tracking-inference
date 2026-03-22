@@ -275,10 +275,7 @@ class BallTracker:
                 max_score = total_score
                 main_ball = track_id
 
-        tracks_dict = {
-            track_id: track.to_dict() for track_id, track in self.tracks.items()
-        }
-        return main_ball, tracks_dict, deleted_tracks
+        return main_ball, self.tracks, deleted_tracks
 
     def to_json(self) -> str:
         data = {
