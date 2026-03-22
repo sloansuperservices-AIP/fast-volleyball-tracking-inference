@@ -42,8 +42,54 @@ def parse_args():
         default=False,
         help="Save only CSV, skip video output",
     )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.5,
+        help="Confidence threshold for detection",
+    )
     return parser.parse_args()
 
+
+
+def infer_model_params(model_path, output_shape=None):
+    model_name = os.path.basename(model_path).lower()
+
+    # Default params
+    params = {
+        "family": "heatmap",
+        "seq": 9,
+        "input_width": 512,
+        "input_height": 288,
+        "grid_cols": None,
+        "grid_rows": None,
+    }
+
+    if "seq15" in model_name:
+        params["seq"] = 15
+    elif "seq9" in model_name:
+        params["seq"] = 9
+    else:
+        params["seq"] = 3
+
+    # Check for grid family based on name or output shape
+    # Grid models usually have (1, seq*3, grid_rows, grid_cols) -> length 4
+    is_grid = "vballnetgrid" in model_name
+    if not is_grid and output_shape:
+        # Check if output dimension matches seq * 3 (for grid models)
+        if len(output_shape) == 4 and output_shape[1] == params["seq"] * 3:
+            is_grid = True
+        elif len(output_shape) == 3 and output_shape[0] == params["seq"] * 3:
+            is_grid = True
+
+    if is_grid:
+        params["family"] = "grid"
+        params["input_width"] = 768
+        params["input_height"] = 432
+        params["grid_cols"] = 48
+        params["grid_rows"] = 27
+
+    return params
 
 
 def load_onnx_model(model_path):
@@ -77,22 +123,14 @@ def load_onnx_model(model_path):
                 resolved_shape.append(dim)
         h0_shape = tuple(resolved_shape)
     
-    # Determine sequence length from model filename
-    if "seq15" in model_path.lower():
-        out_dim = 15
-        batch_size = 15
-    elif "seq9" in model_path.lower():
-        out_dim = 9
-        batch_size = 9
-    else:
-        out_dim = 3
-        batch_size = 3
-        
+    output_shape = session.get_outputs()[0].shape
+    model_params = infer_model_params(model_path, output_shape)
+
     print(f"✅ Model loaded: {model_path}")
     print(
-        f"   Has GRU state: {has_gru}, Sequence length: {batch_size}, Output heatmaps: {out_dim}, h0 shape: {h0_shape if has_gru else 'N/A'}"
+        f"   Has GRU state: {has_gru}, Sequence length: {model_params['seq']}, Family: {model_params['family']}, h0 shape: {h0_shape if has_gru else 'N/A'}"
     )
-    return session, has_gru, out_dim, h0_shape, batch_size
+    return session, has_gru, model_params, h0_shape
 
 
 
@@ -150,11 +188,9 @@ def preprocess_frames(frames, input_height=288, input_width=512):
     return processed
 
 
-def postprocess_output(
-    output, threshold=0.5, input_height=288, input_width=512, out_dim=9
-):
+def postprocess_heatmap(output, threshold, input_height, input_width, out_dim):
     results = []
-    for frame_idx in range(out_dim):  # Process all heatmaps
+    for frame_idx in range(out_dim):
         heatmap = output[0, frame_idx, :, :]
         _, binary = cv2.threshold(heatmap, threshold, 1.0, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(
@@ -172,6 +208,44 @@ def postprocess_output(
         else:
             results.append((0, 0, 0))
     return results
+
+
+def postprocess_grid(output, threshold, seq, input_height, input_width, grid_rows, grid_cols):
+    # Output shape: (1, seq*3, grid_rows, grid_cols)
+    output = output[0].reshape(seq, 3, grid_rows, grid_cols)
+    results = []
+    for frame_idx in range(seq):
+        conf = output[frame_idx, 0]
+        x_offset = output[frame_idx, 1]
+        y_offset = output[frame_idx, 2]
+
+        max_index = int(np.argmax(conf))
+        row = max_index // grid_cols
+        col = max_index % grid_cols
+        conf_score = float(conf[row, col])
+
+        if conf_score < threshold:
+            results.append((0, 0, 0))
+            continue
+
+        x = (col + float(x_offset[row, col])) * (input_width / grid_cols)
+        y = (row + float(y_offset[row, col])) * (input_height / grid_rows)
+        results.append((1, int(x), int(y)))
+    return results
+
+
+def decode_predictions(output, model_params, threshold=0.5):
+    if model_params["family"] == "grid":
+        return postprocess_grid(
+            output, threshold, model_params["seq"],
+            model_params["input_width"], model_params["input_height"],
+            model_params["grid_rows"], model_params["grid_cols"]
+        )
+    else:
+        return postprocess_heatmap(
+            output, threshold, model_params["input_height"],
+            model_params["input_width"], model_params["seq"]
+        )
 
 
 def draw_track(
@@ -200,12 +274,10 @@ def read_frames(cap, frame_queue, max_frames):
 
 def main():
     args = parse_args()
-    input_width, input_height = 512, 288
-    # batch_size is now determined dynamically from the model
-
-    #model_session, out_dim = load_model(args.model_path, input_height, input_width)
     
-    model_session, has_gru, out_dim, h0_shape, batch_size = load_onnx_model(args.model_path)
+    model_session, has_gru, model_params, h0_shape = load_onnx_model(args.model_path)
+    input_width, input_height = model_params["input_width"], model_params["input_height"]
+    batch_size = model_params["seq"]
 
     cap, frame_width, frame_height, fps, total_frames = initialize_video(
         args.video_path
@@ -257,15 +329,15 @@ def main():
         # Prepare input tensor
         input_tensor = np.stack(frame_buffer, axis=2)  # (height, width, seq_len)
         input_tensor = np.expand_dims(input_tensor, axis=0)  # (1, height, width, seq_len)
-        input_tensor = np.transpose(input_tensor, (0, 3, 1, 2))  # (1, seq_len, 288, 512)
+        input_tensor = np.transpose(input_tensor, (0, 3, 1, 2))  # (1, seq_len, H, W)
 
         # Run inference
         inputs = {model_session.get_inputs()[0].name: input_tensor}
         output = model_session.run(None, inputs)[0]
 
         # Process predictions for all frames
-        predictions = postprocess_output(
-            output, input_height=input_height, input_width=input_width, out_dim=out_dim
+        predictions = decode_predictions(
+            output, model_params, threshold=args.threshold
         )
 
         # Save results and visualize for each frame in the batch
