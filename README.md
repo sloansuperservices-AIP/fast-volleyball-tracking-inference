@@ -27,6 +27,8 @@ Achieves **~200 FPS** on a regular CPU (Intel i5-10400F) thanks to a lightweight
 ## Model Comparison
 | Model                                    | F1    | Precision | Recall | Accuracy | Detection Rate |
 |------------------------------------------|-------|-----------|--------|----------|----------------|
+| VballNetGridV1b_seq9_grayscale_best.onnx | 0.884 | 0.892     | 0.876  | 0.806    | 0.819          |
+| VballNetGridV1c_seq9_grayscale_best.onnx | 0.881 | 0.890     | 0.873  | 0.803    | 0.817          |
 | VballNetFastV1_seq9_grayscale_233_h288_w512.onnx | 0.772 | 0.832     | 0.720  | 0.662    | 0.689          |
 | VballNetV1b_seq9_grayscale_best.onnx     | 0.855 | 0.818     | 0.896  | 0.767    | 0.840          |
 | VballNetV1c_seq9_grayscale_best.onnx     | 0.847 | 0.793     | 0.908  | 0.754    | 0.857          |
@@ -91,13 +93,22 @@ output/beach_st_lenina_20250622_g1_005/
 
 # Individual commands
 
-## Detection only (real-time preview)
-```
-uv run src/inference_onnx_seq9_gray_v2.py \
+## Detection only (ONNX, real-time preview)
+```bash
+uv run python main.py --mode track \
   --video_path video.mp4 \
-  --model_path model.onnx \
+  --model_path models/VballNetGridV1b_seq9_grayscale_best.onnx \
   --visualize
-```  
+```
+
+## Detection only (OpenVINO, optimized for CPU)
+```bash
+uv run python main.py --mode track-ov \
+  --video_path video.mp4 \
+  --model_path models/VballNetGridV1b_seq9_grayscale_best.onnx \
+  --device CPU \
+  --visualize
+```
 
 ## Single track → vertical reel (with live preview)
 ```bash
