@@ -9,16 +9,19 @@ import sys
 
 def main():
     parser = argparse.ArgumentParser(description="Fast Volleyball Tracking Inference")
-    parser.add_argument("--mode", type=str, choices=["track", "pose", "analyze", "hub-track"],
+    parser.add_argument("--mode", type=str, choices=["track", "track-ov", "pose", "analyze", "hub-track"],
                         default="track", help="Processing mode")
     parser.add_argument("--video_path", type=str, help="Path to input video file")
     parser.add_argument("--track_file", type=str, help="Path to track JSON file (for pose mode)")
     parser.add_argument("--model_path", type=str, default="models/vballNetV1.onnx", 
                         help="Path to ONNX model file")
+    parser.add_argument("--model_xml", type=str, default="ov/VballNetV2_seq9_grayscale_ov.xml",
+                        help="Path to OpenVINO model XML file")
     parser.add_argument("--output_dir", type=str, default="output", 
                         help="Directory to save output files")
     parser.add_argument("--visualize", action="store_true", 
                         help="Enable visualization on display using cv2")
+    parser.add_argument("--device", type=str, default="CPU", help="OpenVINO device (CPU, GPU, AUTO)")
     
     # Hub specific arguments
     parser.add_argument("--hub_model", type=str, default="https://hub.ultralytics.com/models/ITKRtcQHITZrgT2ZNpRq",
@@ -56,7 +59,7 @@ def main():
             return 1
 
     elif args.mode == "track":
-        # Ball tracking mode
+        # Ball tracking mode (ONNX)
         if not args.video_path:
             print("Error: --video_path is required for tracking mode")
             return 1
@@ -65,13 +68,43 @@ def main():
         try:
             from src.inference_onnx import main as track_main
             # We would need to pass the args to the tracking module
-            print("Ball tracking mode selected")
+            print("Ball tracking mode selected (ONNX)")
             print(f"Video: {args.video_path}")
             print(f"Model: {args.model_path}")
             print(f"Visualize: {args.visualize}")
             # In a full implementation, we would call track_main with appropriate arguments
         except ImportError as e:
             print(f"Error importing tracking module: {e}")
+            return 1
+
+    elif args.mode == "track-ov":
+        # Ball tracking mode (OpenVINO)
+        if not args.video_path:
+            print("Error: --video_path is required for track-ov mode")
+            return 1
+
+        try:
+            # sys.argv needs to be manipulated or parameters passed directly if main() allowed it
+            # But the script uses parse_args() which reads from sys.argv
+            print("Ball tracking mode selected (OpenVINO)")
+            print(f"Video: {args.video_path}")
+            print(f"Model: {args.model_xml}")
+
+            # Simple way to run without refactoring the script
+            import subprocess
+            cmd = [
+                sys.executable, "src/inference_openvino_seq_gray_v2.py",
+                "--video_path", args.video_path,
+                "--model_xml", args.model_xml,
+                "--device", args.device,
+                "--output_dir", args.output_dir
+            ]
+            if args.visualize:
+                cmd.append("--visualize")
+
+            subprocess.run(cmd, check=True)
+        except Exception as e:
+            print(f"Error during OpenVINO tracking: {e}")
             return 1
             
     elif args.mode == "pose":
