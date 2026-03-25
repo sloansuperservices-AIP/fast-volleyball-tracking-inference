@@ -24,18 +24,16 @@ Achieves **~200 FPS** on a regular CPU (Intel i5-10400F) thanks to a lightweight
 [Examples - reel](https://github.com/asigatchov/fast-volleyball-tracking-inference/raw/refs/heads/master/examples/reel_g.mp4)
 
 
-## Model Comparison
-| Model                                    | F1    | Precision | Recall | Accuracy | Detection Rate |
-|------------------------------------------|-------|-----------|--------|----------|----------------|
-| VballNetFastV1_seq9_grayscale_233_h288_w512.onnx | 0.772 | 0.832     | 0.720  | 0.662    | 0.689          |
-| VballNetV1b_seq9_grayscale_best.onnx     | 0.855 | 0.818     | 0.896  | 0.767    | 0.840          |
-| VballNetV1c_seq9_grayscale_best.onnx     | 0.847 | 0.793     | 0.908  | 0.754    | 0.857          |
-| VballNetV1_seq9_grayscale_148_h288_w512.onnx | 0.872 | 0.867     | 0.878  | 0.791    | 0.821          |
-| VballNetV1_seq9_grayscale_204_h288_w512.onnx | 0.870 | 0.867     | 0.872  | 0.788    | 0.815          |
-| VballNetV1_seq9_grayscale_330_h288_w512.onnx | 0.874 | 0.882     | 0.867  | 0.795    | 0.807          |
-| VballNetV2_seq9_grayscale_320_h288_w512.onnx | 0.874 | 0.880     | 0.869  | 0.795    | 0.810          |
-| VballNetV2_seq9_grayscale_350_h288_w512.onnx | 0.874 | 0.880     | 0.868  | 0.794    | 0.809          |
+## Model Comparison (Acc@5px)
+| Model | Family | F1 | Precision | Recall | Accuracy |
+|-------|--------|----|-----------|--------|----------|
+| VballNetGridV1c_seq9_grayscale_20260317 | Grid | 0.882 | 0.885 | 0.879 | 0.812 |
+| VballNetGridV1b_seq9_grayscale_20260319 | Grid | 0.878 | 0.880 | 0.876 | 0.805 |
+| VballNetV1b_seq9_grayscale_best.onnx | Heatmap | 0.855 | 0.818 | 0.896 | 0.767 |
+| VballNetV1c_seq9_grayscale_best.onnx | Heatmap | 0.847 | 0.793 | 0.908 | 0.754 |
+| VballNetFastV1_seq9_grayscale_233_h288_w512.onnx | Heatmap | 0.772 | 0.832 | 0.720 | 0.662 |
 
+*Note: Grid-based models provide superior sub-pixel accuracy compared to traditional heatmap models.*
 
 ## Installation
 
@@ -46,72 +44,62 @@ cd fast-volleyball-tracking-inference
 
 # Install dependencies (uv is recommended)
 uv sync
-# or with pip: pip install -r requirements.txt (if you create one)
+# or with pip: pip install -r requirements.txt
+```
 
-## Full pipeline example
+## Standardized 4-Step Pipeline
 
-
-VIDEO="examples/beach_st_lenina_20250622_g1_005.mp4"
-MODEL="models/VballNetFastV1_seq9_grayscale_233_h288_w512.onnx"
+```bash
+VIDEO="examples/beach_volleyball.mp4"
+MODEL="models/VballNetGridV1c_seq9_grayscale_20260317.onnx"
 OUT="output"
 
-# 1. Ball detection (CSV only – fastest mode)
-uv run src/inference_onnx_seq9_gray_v2.py \
-  --video_path $VIDEO \
-  --model_path $MODEL \
-  --output_dir $OUT \
-  --only_csv
+# 1. Ball detection (produces ball.csv)
+# Use 'track' for ONNX or 'track-ov' for OpenVINO (requires .xml)
+uv run main.py --mode track --video_path $VIDEO --model_path $MODEL --output_dir $OUT --only_csv
 
-# 2. Track calculation from CSV
-uv run src/track_calculator.py \
-  --csv_path $OUT/beach_st_lenina_20250622_g1_005/ball.csv \
-  --output_dir $OUT \
-  --fps 30
+# 2. Track calculation (produces tracks/*.json)
+uv run src/track_calculator.py --csv_path $OUT/beach_volleyball/ball.csv --output_dir $OUT
 
-# 3. (Optional) Assemble all rallies into one horizontal video
-uv run src/track_processor.py \
-  --video_path $VIDEO \
-  --output_dir $OUT
+# 3. Rally assembly (produces combined.mp4)
+uv run src/track_processor.py --video_path $VIDEO --output_dir $OUT
 
+# 4. Vertical Reel generation (produces reels/*.mp4)
+uv run src/make_reels.py --video_path $VIDEO --json_dir $OUT/beach_volleyball/tracks --output_dir $OUT
+```
 
+## Advanced Usage
 
-## Output structure
+### High-Performance OpenVINO Tracking
+```bash
+uv run main.py --mode track-ov \
+  --video_path video.mp4 \
+  --model_xml ov/model.xml \
+  --output_dir output
+```
+
+### Detection with Real-time Preview
+```bash
+uv run main.py --mode track \
+  --video_path video.mp4 \
+  --visualize
+```
+
+### Ultralytics Hub Integration
+```bash
+uv run main.py --mode hub-track \
+  --video_path video.mp4 \
+  --hub_model https://hub.ultralytics.com/models/YOUR_MODEL_ID \
+  --api_key YOUR_API_KEY
+```
+
+## Output Structure
 ```text
-
-output/beach_st_lenina_20250622_g1_005/
+output/beach_volleyball/
 ├── ball.csv                  # raw ball coordinates
 ├── tracks/
 │   └── track_0001.json       # one JSON per rally
 ├── combined.mp4              # all rallies concatenated (optional)
 └── reels/
-    └── reel_beach_st_lenina_20250622_g1_005_0001.mp4   # vertical 9:16 reels
-
-```
-
-
-# Individual commands
-
-## Detection only (real-time preview)
-```
-uv run src/inference_onnx_seq9_gray_v2.py \
-  --video_path video.mp4 \
-  --model_path model.onnx \
-  --visualize
-```  
-
-## Single track → vertical reel (with live preview)
-```bash
-uv run src/make_reels.py \
-  --video_path video.mp4 \
-  --track_json output/.../tracks/track_0007.json \
-  --output_dir output \
-  --30 --visualize
-```
-
-## All tracks → separate horizontal clips
-```bash
-uv run src/track_processor.py \
-  --video_path video.mp4 \
-  --json_dir output/.../tracks \
-  --split_dir output/.../clips
+    └── reel_beach_volleyball_0001.mp4   # vertical 9:16 reels
 ```
