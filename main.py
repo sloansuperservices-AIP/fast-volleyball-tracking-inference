@@ -6,19 +6,25 @@ Main entry point for the fast volleyball tracking inference system.
 import argparse
 import os
 import sys
+import subprocess
 
 def main():
     parser = argparse.ArgumentParser(description="Fast Volleyball Tracking Inference")
-    parser.add_argument("--mode", type=str, choices=["track", "pose", "analyze", "hub-track"],
-                        default="track", help="Processing mode")
+    parser.add_argument("--mode", type=str, choices=["track", "track-ov", "pose", "analyze", "hub-track"],
+                        default="track", help="Processing mode: track (ONNX), track-ov (OpenVINO), pose, analyze, hub-track")
     parser.add_argument("--video_path", type=str, help="Path to input video file")
     parser.add_argument("--track_file", type=str, help="Path to track JSON file (for pose mode)")
-    parser.add_argument("--model_path", type=str, default="models/vballNetV1.onnx", 
+    parser.add_argument("--model_path", type=str, default="models/VballNetV1b_seq9_grayscale_best.onnx",
                         help="Path to ONNX model file")
+    parser.add_argument("--model_xml", type=str, help="Path to OpenVINO .xml model file")
     parser.add_argument("--output_dir", type=str, default="output", 
                         help="Directory to save output files")
     parser.add_argument("--visualize", action="store_true", 
                         help="Enable visualization on display using cv2")
+    parser.add_argument("--only_csv", action="store_true",
+                        help="Save only CSV, skip video output")
+    parser.add_argument("--confidence_threshold", type=float, default=0.5,
+                        help="Confidence threshold for detection")
     
     # Hub specific arguments
     parser.add_argument("--hub_model", type=str, default="https://hub.ultralytics.com/models/ITKRtcQHITZrgT2ZNpRq",
@@ -56,24 +62,50 @@ def main():
             return 1
 
     elif args.mode == "track":
-        # Ball tracking mode
+        # Ball tracking mode (ONNX)
         if not args.video_path:
             print("Error: --video_path is required for tracking mode")
             return 1
             
-        # Import and run ball tracking
-        try:
-            from src.inference_onnx import main as track_main
-            # We would need to pass the args to the tracking module
-            print("Ball tracking mode selected")
-            print(f"Video: {args.video_path}")
-            print(f"Model: {args.model_path}")
-            print(f"Visualize: {args.visualize}")
-            # In a full implementation, we would call track_main with appropriate arguments
-        except ImportError as e:
-            print(f"Error importing tracking module: {e}")
+        cmd = [
+            sys.executable, "src/inference_onnx_seq_gray_v2.py",
+            "--video_path", args.video_path,
+            "--model_path", args.model_path,
+            "--output_dir", args.output_dir,
+            "--confidence_threshold", str(args.confidence_threshold)
+        ]
+        if args.visualize:
+            cmd.append("--visualize")
+        if args.only_csv:
+            cmd.append("--only_csv")
+
+        print(f"Starting ONNX tracking: {' '.join(cmd)}")
+        return subprocess.call(cmd)
+
+    elif args.mode == "track-ov":
+        # Ball tracking mode (OpenVINO)
+        if not args.video_path:
+            print("Error: --video_path is required for track-ov mode")
+            return 1
+        if not args.model_xml:
+            print("Error: --model_xml is required for track-ov mode")
             return 1
             
+        cmd = [
+            sys.executable, "src/inference_openvino_seq_gray_v2.py",
+            "--video_path", args.video_path,
+            "--model_xml", args.model_xml,
+            "--output_dir", args.output_dir,
+            "--threshold", str(args.confidence_threshold)
+        ]
+        if args.visualize:
+            cmd.append("--visualize")
+        if args.only_csv:
+            cmd.append("--only_csv")
+
+        print(f"Starting OpenVINO tracking: {' '.join(cmd)}")
+        return subprocess.call(cmd)
+
     elif args.mode == "pose":
         # Pose detection mode
         if not args.track_file or not args.video_path:
@@ -109,7 +141,7 @@ def main():
     else:
         print("Hello from fast-volleyball-tracking-inference!")
         print("Use --mode to specify the processing mode")
-        print("Available modes: track, pose, analyze")
+        print("Available modes: track, track-ov, pose, analyze, hub-track")
         
     return 0
 
