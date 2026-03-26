@@ -1,41 +1,24 @@
 # Fast Volleyball Ball Tracking → Vertical Reels
 
 A complete high-speed pipeline for volleyball ball detection, tracking, and automatic generation of **9:16 vertical reels** with the ball always centered.
-Achieves **~200 FPS** on a regular CPU (Intel i5-10400F) thanks to a lightweight grayscale seq-9 ONNX model.
+Achieves **up to 270 FPS** on a regular CPU thanks to lightweight grayscale models and optimized inference engines.
 
-## Features (fully implemented)
+## Features
 
-1. Ball detection → `ball.csv`  
-2. Track calculation → separate `track_*.json` files  
-3. Assembly of all rallies into one horizontal video or individual clips  
-4. Creation of **vertical 9:16 reels** with smooth ball-centered cropping (main output)
-
-
-<table>
-   <tr><td>
-<img alt="backline" weight="512" src="https://raw.githubusercontent.com/asigatchov/fast-volleyball-tracking-inference/refs/heads/master/examples/output.gif">
-   </td><td>
-      <img weight="512" src="https://raw.githubusercontent.com/asigatchov/fast-volleyball-tracking-inference/refs/heads/master/examples/sideline.gif" alt="sideline">
-</td></tr>
-</table>
-
-
-<video src="https://github.com/asigatchov/fast-volleyball-tracking-inference/raw/refs/heads/master/examples/reel_g.mp4" controls width="100%"></video>
-[Examples - reel](https://github.com/asigatchov/fast-volleyball-tracking-inference/raw/refs/heads/master/examples/reel_g.mp4)
-
+1. **Dual Decoding Logic**: Supports both traditional Heatmap-based models and the new **Grid-based** models for superior sub-pixel accuracy.
+2. **Multi-Runtime Support**: High-performance inference using **ONNX Runtime** and **OpenVINO** (for Intel hardware).
+3. **Automated Pipeline**: Ball detection → Track calculation → Rally extraction → Vertical Reel generation.
+4. **9:16 Vertical Reels**: Smooth ball-centered cropping with lead offsets in movement direction.
 
 ## Model Comparison
-| Model                                    | F1    | Precision | Recall | Accuracy | Detection Rate |
-|------------------------------------------|-------|-----------|--------|----------|----------------|
-| VballNetFastV1_seq9_grayscale_233_h288_w512.onnx | 0.772 | 0.832     | 0.720  | 0.662    | 0.689          |
-| VballNetV1b_seq9_grayscale_best.onnx     | 0.855 | 0.818     | 0.896  | 0.767    | 0.840          |
-| VballNetV1c_seq9_grayscale_best.onnx     | 0.847 | 0.793     | 0.908  | 0.754    | 0.857          |
-| VballNetV1_seq9_grayscale_148_h288_w512.onnx | 0.872 | 0.867     | 0.878  | 0.791    | 0.821          |
-| VballNetV1_seq9_grayscale_204_h288_w512.onnx | 0.870 | 0.867     | 0.872  | 0.788    | 0.815          |
-| VballNetV1_seq9_grayscale_330_h288_w512.onnx | 0.874 | 0.882     | 0.867  | 0.795    | 0.807          |
-| VballNetV2_seq9_grayscale_320_h288_w512.onnx | 0.874 | 0.880     | 0.869  | 0.795    | 0.810          |
-| VballNetV2_seq9_grayscale_350_h288_w512.onnx | 0.874 | 0.880     | 0.868  | 0.794    | 0.809          |
 
+| Model | FPS | Acc@5px (all) | Acc@5px (visible) |
+| :--- | :--- | :--- | :--- |
+| VballNetV1_seq9_grayscale_148_h288_w512.onnx | 138.68 | 87.25% | 86.43% |
+| VballNetV1_seq9_grayscale_204_h288_w512.onnx | 138.39 | 85.95% | 84.88% |
+| VballNetV2_seq9_grayscale_320_h288_w512.onnx | 114.22 | 83.01% | 82.56% |
+| VballNetGridV1b_seq9_grayscale_...onnx | 117.55 | 75.49% | 74.03% |
+| VballNetFastV1_seq9_grayscale_233_...onnx | **271.86** | 73.20% | 68.99% |
 
 ## Installation
 
@@ -46,72 +29,53 @@ cd fast-volleyball-tracking-inference
 
 # Install dependencies (uv is recommended)
 uv sync
-# or with pip: pip install -r requirements.txt (if you create one)
+```
 
-## Full pipeline example
+## Quick Start
 
-
-VIDEO="examples/beach_st_lenina_20250622_g1_005.mp4"
-MODEL="models/VballNetFastV1_seq9_grayscale_233_h288_w512.onnx"
-OUT="output"
-
-# 1. Ball detection (CSV only – fastest mode)
-uv run src/inference_onnx_seq9_gray_v2.py \
-  --video_path $VIDEO \
-  --model_path $MODEL \
-  --output_dir $OUT \
+```bash
+# 1) Detection -> ball.csv (using ONNX)
+python3 main.py --mode track \
+  --video_path "examples/video.mp4" \
+  --model_path "models/model.onnx" \
   --only_csv
 
-# 2. Track calculation from CSV
+# 1b) Detection using OpenVINO (optimized for Intel CPU/GPU)
+python3 main.py --mode track-ov \
+  --video_path "examples/video.mp4" \
+  --model_path "ov/model.xml" \
+  --device CPU
+
+# 2) Tracks from CSV -> track_*.json
 uv run src/track_calculator.py \
-  --csv_path $OUT/beach_st_lenina_20250622_g1_005/ball.csv \
-  --output_dir $OUT \
-  --fps 30
+  --csv_path "output/video/ball.csv" \
+  --output_dir "output"
 
-# 3. (Optional) Assemble all rallies into one horizontal video
-uv run src/track_processor.py \
-  --video_path $VIDEO \
-  --output_dir $OUT
-
-
-
-## Output structure
-```text
-
-output/beach_st_lenina_20250622_g1_005/
-├── ball.csv                  # raw ball coordinates
-├── tracks/
-│   └── track_0001.json       # one JSON per rally
-├── combined.mp4              # all rallies concatenated (optional)
-└── reels/
-    └── reel_beach_st_lenina_20250622_g1_005_0001.mp4   # vertical 9:16 reels
-
-```
-
-
-# Individual commands
-
-## Detection only (real-time preview)
-```
-uv run src/inference_onnx_seq9_gray_v2.py \
-  --video_path video.mp4 \
-  --model_path model.onnx \
-  --visualize
-```  
-
-## Single track → vertical reel (with live preview)
-```bash
+# 3) Vertical reels from tracks
 uv run src/make_reels.py \
-  --video_path video.mp4 \
-  --track_json output/.../tracks/track_0007.json \
-  --output_dir output \
-  --30 --visualize
+  --video_path "examples/video.mp4" \
+  --json_dir "output/video/tracks" \
+  --output_dir "output"
 ```
 
-## All tracks → separate horizontal clips
+## Output Structure
+
+```text
+output/video_name/
+├── ball.csv                  # Raw ball coordinates
+├── tracks/
+│   └── track_0001.json       # Individual rally data
+└── reels/
+    └── reel_video_0001.mp4   # 9:16 vertical reels
+```
+
+## Advanced Features
+
+### Grid-based Models
+Grid models (prefixed with `VballNetGrid`) improve tracking accuracy by predicting sub-pixel offsets on a grid coordinate system, reducing quantization errors common in heatmap models.
+
+### Pose-aware Tracking
+Integrate player pose information into the tracking JSON for proximity-based rally filtering:
 ```bash
-uv run src/track_processor.py \
-  --video_path video.mp4 \
-  --json_dir output/.../tracks \
-  --split_dir output/.../clips
+python3 main.py --mode pose --video_path video.mp4 --track_file tracks/track_0001.json
 ```
