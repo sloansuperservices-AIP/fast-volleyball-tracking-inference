@@ -18,49 +18,6 @@ class Track:
     reason: str = "Unknown"
     fps: float = 30.0
 
-    # Statistics
-    max_height: float = 0.0  # Min Y value (pixels)
-    total_distance: float = 0.0  # Pixels
-    avg_speed: float = 0.0  # Pixels/frame
-    max_speed: float = 0.0  # Pixels/frame
-
-    def calculate_stats(self):
-        """Calculates statistics based on positions."""
-        if not self.positions:
-            self.max_height = 0.0
-            self.total_distance = 0.0
-            self.avg_speed = 0.0
-            self.max_speed = 0.0
-            return
-
-        # Max Height (min Y)
-        y_values = [pos[0][1] for pos in self.positions]
-        self.max_height = float(min(y_values)) if y_values else 0.0
-
-        # Speed and Distance
-        total_dist = 0.0
-        speeds = []
-
-        pos_list = list(self.positions)
-        for i in range(1, len(pos_list)):
-            p1 = np.array(pos_list[i-1][0])
-            p2 = np.array(pos_list[i][0])
-            dist = np.linalg.norm(p2 - p1)
-            total_dist += dist
-
-            f1 = pos_list[i-1][1]
-            f2 = pos_list[i][1]
-            dt = f2 - f1
-            if dt > 0:
-                speeds.append(dist / dt)
-            else:
-                speeds.append(0.0)
-
-        self.total_distance = float(total_dist)
-        self.max_speed = float(max(speeds)) if speeds else 0.0
-        self.avg_speed = float(np.mean(speeds)) if speeds else 0.0
-
-
     def to_dict(self) -> Dict[str, Any]:
         """Преобразует объект Track в словарь, пригодный для сериализации в JSON."""
 
@@ -87,10 +44,6 @@ class Track:
             "track_id": self.track_id,
             "reason": self.reason,
             "fps": self.fps,
-            "max_height": convert_numpy(self.max_height),
-            "total_distance": convert_numpy(self.total_distance),
-            "avg_speed": convert_numpy(self.avg_speed),
-            "max_speed": convert_numpy(self.max_speed),
         }
 
     def size(self) -> int:
@@ -125,10 +78,6 @@ class Track:
         track.start_frame = data["start_frame"]
         track.ball_sizes = deque(data.get("ball_sizes", []), maxlen=buffer_size)
         track.track_id = data.get("track_id", 0)
-        track.max_height = data.get("max_height", 0.0)
-        track.total_distance = data.get("total_distance", 0.0)
-        track.avg_speed = data.get("avg_speed", 0.0)
-        track.max_speed = data.get("max_speed", 0.0)
         return track
 
 
@@ -147,6 +96,7 @@ class BallTracker:
         self.max_disappeared = max_disappeared
         self.max_distance = max_distance
         self.ball_diameter_cm = ball_diameter_cm
+        self.fps = fps
 
 
     def box_to_position(self, box):
@@ -170,7 +120,6 @@ class BallTracker:
         distance_matrix = np.zeros((len(active_tracks), len(unused_detections)))
         for i, (track_id, track) in enumerate(active_tracks):
             if len(track.positions) > 0:
-                last_pos = track.positions[-1][0:2]
                 last_pos = track.prediction
                 for j, det in enumerate(unused_detections):
                     center_x, center_y, diameter = self.box_to_position(det)
@@ -205,7 +154,7 @@ class BallTracker:
                 reason = (
                     "No active tracks"
                     if not active_tracks
-                    else f"Distance to nearest track > {self.max_distance} pixels; min_val = {min_val:.2f}"
+                    else f"Distance to nearest track > {self.max_distance} pixels"
                 )
                 self._add_track(det, frame_number, reason)
 
@@ -214,6 +163,7 @@ class BallTracker:
     def _add_track(self, detection, frame_number, reason="Unknown"):
         track = Track()
         track.track_id = self.next_id
+        track.fps = self.fps
         center_x, center_y, diameter = self.box_to_position(detection)
         position = [center_x, center_y]
 
@@ -224,9 +174,6 @@ class BallTracker:
         track.ball_sizes = deque([diameter], maxlen=self.buffer_size)
         track.reason = reason
         self.tracks[self.next_id] = track
-        print(
-            f"New track {self.next_id} created at frame {frame_number}, position ({center_x:.1f}, {center_y:.1f}), reason: {reason}"
-        )
         self.next_id += 1
 
     def _update_track(self, track_id, detection, frame_number):
