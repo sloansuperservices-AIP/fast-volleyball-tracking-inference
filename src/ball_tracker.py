@@ -224,9 +224,7 @@ class BallTracker:
         track.ball_sizes = deque([diameter], maxlen=self.buffer_size)
         track.reason = reason
         self.tracks[self.next_id] = track
-        print(
-            f"New track {self.next_id} created at frame {frame_number}, position ({center_x:.1f}, {center_y:.1f}), reason: {reason}"
-        )
+        # print(f"New track {self.next_id} created at frame {frame_number}, position ({center_x:.1f}, {center_y:.1f}), reason: {reason}")
         self.next_id += 1
 
     def _update_track(self, track_id, detection, frame_number):
@@ -275,7 +273,10 @@ class BallTracker:
                 max_score = total_score
                 main_ball = track_id
 
-        return main_ball, self.tracks, deleted_tracks
+        tracks_dict = {
+            track_id: track.to_dict() for track_id, track in self.tracks.items()
+        }
+        return main_ball, tracks_dict, deleted_tracks
 
     def to_json(self) -> str:
         data = {
