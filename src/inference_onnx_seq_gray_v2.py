@@ -69,7 +69,7 @@ def load_onnx_model(model_path):
                 if dim in ["batch", "batch_size", None]:
                     resolved_shape.append(1)
                 elif "hidden" in str(dim).lower():
-                    resolved_shape.append(512)  # Адаптируй под твою модель, если hidden size другой
+                    resolved_shape.append(512)
                 else:
                     raise ValueError(
                         f"Unknown symbolic dimension '{dim}' in h0_shape: {h0_shape}"
@@ -78,22 +78,35 @@ def load_onnx_model(model_path):
                 resolved_shape.append(dim)
         h0_shape = tuple(resolved_shape)
     
-    # Determine sequence length from model filename
-    if "seq15" in model_path.lower():
-        out_dim = 15
-        batch_size = 15
-    elif "seq9" in model_path.lower():
-        out_dim = 9
-        batch_size = 9
+    # Determine sequence length from model filename or output shape
+    output_shape = session.get_outputs()[0].shape
+    # output_shape usually (1, C, H, W)
+    channels = output_shape[1]
+
+    is_grid = False
+    if "grid" in model_path.lower() or (channels % 3 == 0 and output_shape[2] < 100):
+        is_grid = True
+        batch_size = channels // 3
+        out_dim = batch_size
     else:
-        out_dim = 3
-        batch_size = 3
+        out_dim = channels
+        batch_size = channels
+
+    if "seq15" in model_path.lower():
+        batch_size = 15
+        out_dim = 15
+    elif "seq9" in model_path.lower():
+        batch_size = 9
+        out_dim = 9
+    elif "seq5" in model_path.lower():
+        batch_size = 5
+        out_dim = 5
         
     print(f"✅ Model loaded: {model_path}")
     print(
-        f"   Has GRU state: {has_gru}, Sequence length: {batch_size}, Output heatmaps: {out_dim}, h0 shape: {h0_shape if has_gru else 'N/A'}"
+        f"   Has GRU state: {has_gru}, Sequence length: {batch_size}, Output channels: {channels}, Type: {'Grid' if is_grid else 'Heatmap'}"
     )
-    return session, has_gru, out_dim, h0_shape, batch_size, input_names, output_names
+    return session, has_gru, out_dim, h0_shape, batch_size, input_names, output_names, is_grid
 
 
 def initialize_video(video_path):
@@ -149,11 +162,9 @@ def preprocess_frames(frames, input_height=288, input_width=512):
     return processed
 
 
-def postprocess_output(
-    output, threshold=0.5, input_height=288, input_width=512, out_dim=9
-):
+def postprocess_heatmap(output, threshold, out_dim):
     results = []
-    for frame_idx in range(out_dim):  # Process all heatmaps
+    for frame_idx in range(out_dim):
         heatmap = output[0, frame_idx, :, :]
         _, binary = cv2.threshold(heatmap, threshold, 1.0, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(
@@ -173,10 +184,52 @@ def postprocess_output(
     return results
 
 
+def postprocess_grid(output, threshold, out_dim, input_height, input_width):
+    # output shape (1, out_dim*3, grid_H, grid_W)
+    grid_h, grid_w = output.shape[2], output.shape[3]
+    y_pred = np.split(output, out_dim, axis=1)
+    y_pred = np.stack(y_pred, axis=2)
+    y_pred = np.moveaxis(y_pred, 1, -1)
+
+    conf_grid, x_offset_grid, y_offset_grid = np.split(y_pred, 3, axis=-1)
+    conf_grid = np.squeeze(conf_grid, axis=-1)
+    x_offset_grid = np.squeeze(x_offset_grid, axis=-1)
+    y_offset_grid = np.squeeze(y_offset_grid, axis=-1)
+
+    results = []
+    # conf_grid shape (1, seq, grid_H, grid_W)
+    for j in range(out_dim):
+        curr_conf_grid = conf_grid[0][j]
+        curr_x_offset_grid = x_offset_grid[0][j]
+        curr_y_offset_grid = y_offset_grid[0][j]
+
+        max_conf_val = np.max(curr_conf_grid)
+        pred_row, pred_col = np.unravel_index(np.argmax(curr_conf_grid), curr_conf_grid.shape)
+
+        if max_conf_val >= threshold:
+            x_offset = curr_x_offset_grid[pred_row][pred_col]
+            y_offset = curr_y_offset_grid[pred_row][pred_col]
+            x_pred = int((x_offset + pred_col) * (input_width / grid_w))
+            y_pred_val = int((y_offset + pred_row) * (input_height / grid_h))
+            results.append((1, x_pred, y_pred_val))
+        else:
+            results.append((0, 0, 0))
+    return results
+
+
+def postprocess_output(output, threshold=0.5, input_height=288, input_width=512, out_dim=9, is_grid=False):
+    if is_grid:
+        return postprocess_grid(output, threshold, out_dim, input_height, input_width)
+    else:
+        return postprocess_heatmap(output, threshold, out_dim)
+
+
 def draw_track(
     frame, track_points, current_color=(0, 0, 255), history_color=(255, 0, 0)
 ):
-    for point in list(track_points)[:-1]:
+    import itertools
+    points = list(itertools.islice(track_points, 0, len(track_points)-1))
+    for point in points:
         if point is not None:
             cv2.circle(frame, point, 5, history_color, -1)
     if track_points and track_points[-1] is not None:
@@ -185,21 +238,20 @@ def draw_track(
 
 
 def run_inference(session, input_tensor, has_gru, h0, input_names, output_names):
-    """Helper для инференса с поддержкой GRU."""
-    inputs = {input_names[0]: input_tensor}  # Основной инпут (кадры)
+    inputs = {input_names[0]: input_tensor}
     if has_gru:
         if len(input_names) < 2:
             raise ValueError("GRU model expects at least 2 inputs: images and h0")
-        inputs[input_names[1]] = h0  # Добавляем h0
+        inputs[input_names[1]] = h0
     
     outputs = session.run(output_names, inputs)
     
-    heatmaps = outputs[0]  # Первый аутпут — heatmaps
+    heatmaps = outputs[0]
     new_h0 = None
     if has_gru:
         if len(outputs) < 2:
             raise ValueError("GRU model should output at least 2 values: heatmaps and hn")
-        new_h0 = outputs[1]  # Второе — новое скрытое состояние
+        new_h0 = outputs[1]
     return heatmaps, new_h0
 
 
@@ -218,9 +270,13 @@ def read_frames(cap, frame_queue, max_frames):
 
 def main():
     args = parse_args()
-    input_width, input_height = 512, 288
     
-    model_session, has_gru, out_dim, h0_shape, batch_size, input_names, output_names = load_onnx_model(args.model_path)
+    model_session, has_gru, out_dim, h0_shape, batch_size, input_names, output_names, is_grid = load_onnx_model(args.model_path)
+
+    if is_grid:
+        input_width, input_height = 768, 432
+    else:
+        input_width, input_height = 512, 288
 
     cap, frame_width, frame_height, fps, total_frames = initialize_video(
         args.video_path
@@ -236,10 +292,8 @@ def main():
     frame_index = 0
     frame_queue = queue.Queue(maxsize=2)
     
-    # Инициализация скрытого состояния для GRU
     h0 = np.zeros(h0_shape, dtype=np.float32) if has_gru and h0_shape else None
 
-    # Start frame reading thread
     def frame_reader():
         while cap.isOpened():
             read_frames(cap, frame_queue, batch_size)
@@ -252,15 +306,12 @@ def main():
     while True:
         start_time = time.time()
 
-        # Get batch of frames
         frames = frame_queue.get()
         if frames is None:
             break
 
-        # Preprocess frames in batch
         processed_frames = preprocess_frames(frames, input_height, input_width)
 
-        # Fill buffer if not enough frames
         while len(frame_buffer) < batch_size:
             frame_buffer.append(
                 processed_frames[0]
@@ -268,26 +319,21 @@ def main():
                 else np.zeros((input_height, input_width), dtype=np.float32)
             )
 
-        # Update buffer with new frames
         for pf in processed_frames:
             frame_buffer.append(pf)
 
-        # Prepare input tensor
-        input_tensor = np.stack(frame_buffer, axis=2)  # (height, width, seq_len)
-        input_tensor = np.expand_dims(input_tensor, axis=0)  # (1, height, width, seq_len)
-        input_tensor = np.transpose(input_tensor, (0, 3, 1, 2))  # (1, seq_len, 288, 512)
+        input_tensor = np.stack(frame_buffer, axis=2)
+        input_tensor = np.expand_dims(input_tensor, axis=0)
+        input_tensor = np.transpose(input_tensor, (0, 3, 1, 2))
 
-        # Run inference with GRU support
         output, new_h0 = run_inference(model_session, input_tensor, has_gru, h0, input_names, output_names)
         if has_gru and new_h0 is not None:
-            h0 = new_h0  # Обновляем состояние для следующего батча
+            h0 = new_h0
 
-        # Process predictions for all frames
         predictions = postprocess_output(
-            output, input_height=input_height, input_width=input_width, out_dim=out_dim
+            output, threshold=0.5, input_height=input_height, input_width=input_width, out_dim=out_dim, is_grid=is_grid
         )
 
-        # Save results and visualize for each frame in the batch
         for i, (visibility, x, y) in enumerate(predictions[: len(frames)]):
             x_orig = x * frame_width / input_width if visibility else -1
             y_orig = y * frame_height / input_height if visibility else -1
@@ -313,7 +359,7 @@ def main():
                     cv2.namedWindow("Ball Tracking", cv2.WINDOW_NORMAL)
                     cv2.imshow("Ball Tracking", vis_frame)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
-                        exit_flag = True  # Set flag to exit
+                        exit_flag = True
                         break
                 if out_writer is not None:
                     out_writer.write(vis_frame)
@@ -321,8 +367,6 @@ def main():
             break
 
         end_time = time.time()
-        batch_time = end_time - start_time
-        batch_fps = len(frames) / batch_time if batch_time > 0 else 0
         pbar.update(len(frames))
         frame_index += len(frames)
 
