@@ -51,9 +51,22 @@ def load_onnx_model(model_path):
     session = ort.InferenceSession(
         model_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
     )
+    input_meta = session.get_inputs()[0]
     input_names = [inp.name for inp in session.get_inputs()]
     output_names = [out.name for out in session.get_outputs()]
     
+    # Try to detect input resolution from model
+    input_shape = input_meta.shape
+    # input_shape can be (batch, seq, h, w)
+    try:
+        if len(input_shape) == 4:
+            input_height = input_shape[2] if isinstance(input_shape[2], int) else 288
+            input_width = input_shape[3] if isinstance(input_shape[3], int) else 512
+        else:
+            input_height, input_width = 288, 512
+    except:
+        input_height, input_width = 288, 512
+
     has_gru = "h0" in input_names
     h0_shape = None
     if has_gru:
@@ -69,7 +82,7 @@ def load_onnx_model(model_path):
                 if dim in ["batch", "batch_size", None]:
                     resolved_shape.append(1)
                 elif "hidden" in str(dim).lower():
-                    resolved_shape.append(512)  # Адаптируй под твою модель, если hidden size другой
+                    resolved_shape.append(512)
                 else:
                     raise ValueError(
                         f"Unknown symbolic dimension '{dim}' in h0_shape: {h0_shape}"
@@ -78,22 +91,22 @@ def load_onnx_model(model_path):
                 resolved_shape.append(dim)
         h0_shape = tuple(resolved_shape)
     
-    # Determine sequence length from model filename
+    # Determine sequence length from model filename or input channels
     if "seq15" in model_path.lower():
-        out_dim = 15
         batch_size = 15
     elif "seq9" in model_path.lower():
-        out_dim = 9
         batch_size = 9
+    elif isinstance(input_shape[1], int):
+        batch_size = input_shape[1]
     else:
-        out_dim = 3
-        batch_size = 3
+        batch_size = 9
         
+    out_dim = batch_size
     print(f"✅ Model loaded: {model_path}")
     print(
-        f"   Has GRU state: {has_gru}, Sequence length: {batch_size}, Output heatmaps: {out_dim}, h0 shape: {h0_shape if has_gru else 'N/A'}"
+        f"   Input: {input_width}x{input_height}, Batch: {batch_size}, Has GRU: {has_gru}"
     )
-    return session, has_gru, out_dim, h0_shape, batch_size, input_names, output_names
+    return session, has_gru, out_dim, h0_shape, batch_size, input_names, output_names, input_width, input_height
 
 
 def initialize_video(video_path):
@@ -153,23 +166,52 @@ def postprocess_output(
     output, threshold=0.5, input_height=288, input_width=512, out_dim=9
 ):
     results = []
-    for frame_idx in range(out_dim):  # Process all heatmaps
-        heatmap = output[0, frame_idx, :, :]
-        _, binary = cv2.threshold(heatmap, threshold, 1.0, cv2.THRESH_BINARY)
-        contours, _ = cv2.findContours(
-            (binary * 255).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-        if contours:
-            largest_contour = max(contours, key=cv2.contourArea)
-            M = cv2.moments(largest_contour)
-            if M["m00"] != 0:
-                cx = int(M["m10"] / M["m00"])
-                cy = int(M["m01"] / M["m00"])
+    batch, channels, h, w = output.shape
+
+    # Grid models have out_dim*3 channels and small h,w (grid size)
+    is_grid = (channels == out_dim * 3)
+
+    if is_grid:
+        # Reshape to (batch, seq, 3, h, w) where 3 is (conf, x_offset, y_offset)
+        grid_out = output.reshape(batch, out_dim, 3, h, w)
+        grid_size_w = input_width / w
+        grid_size_h = input_height / h
+
+        for frame_idx in range(out_dim):
+            conf_grid = grid_out[0, frame_idx, 0, :, :]
+            x_offset_grid = grid_out[0, frame_idx, 1, :, :]
+            y_offset_grid = grid_out[0, frame_idx, 2, :, :]
+
+            max_conf = np.max(conf_grid)
+            if max_conf >= threshold:
+                pred_row, pred_col = np.unravel_index(np.argmax(conf_grid), conf_grid.shape)
+                x_offset = x_offset_grid[pred_row, pred_col]
+                y_offset = y_offset_grid[pred_row, pred_col]
+
+                cx = int((pred_col + x_offset) * grid_size_w)
+                cy = int((pred_row + y_offset) * grid_size_h)
                 results.append((1, cx, cy))
             else:
                 results.append((0, 0, 0))
-        else:
-            results.append((0, 0, 0))
+    else:
+        # Heatmap logic
+        for frame_idx in range(out_dim):
+            heatmap = output[0, frame_idx, :, :]
+            _, binary = cv2.threshold(heatmap, threshold, 1.0, cv2.THRESH_BINARY)
+            contours, _ = cv2.findContours(
+                (binary * 255).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            if contours:
+                largest_contour = max(contours, key=cv2.contourArea)
+                M = cv2.moments(largest_contour)
+                if M["m00"] != 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
+                    results.append((1, cx, cy))
+                else:
+                    results.append((0, 0, 0))
+            else:
+                results.append((0, 0, 0))
     return results
 
 
@@ -218,9 +260,8 @@ def read_frames(cap, frame_queue, max_frames):
 
 def main():
     args = parse_args()
-    input_width, input_height = 512, 288
     
-    model_session, has_gru, out_dim, h0_shape, batch_size, input_names, output_names = load_onnx_model(args.model_path)
+    model_session, has_gru, out_dim, h0_shape, batch_size, input_names, output_names, input_width, input_height = load_onnx_model(args.model_path)
 
     cap, frame_width, frame_height, fps, total_frames = initialize_video(
         args.video_path

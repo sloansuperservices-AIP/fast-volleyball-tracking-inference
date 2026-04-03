@@ -6,14 +6,18 @@ Main entry point for the fast volleyball tracking inference system.
 import argparse
 import os
 import sys
+import subprocess
+
+def run_cmd(cmd):
+    print(f"Executing: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
 
 def main():
     parser = argparse.ArgumentParser(description="Fast Volleyball Tracking Inference")
-    parser.add_argument("--mode", type=str, choices=["track", "pose", "analyze", "hub-track"],
-                        default="track", help="Processing mode")
-    parser.add_argument("--video_path", type=str, help="Path to input video file")
-    parser.add_argument("--track_file", type=str, help="Path to track JSON file (for pose mode)")
-    parser.add_argument("--model_path", type=str, default="models/vballNetV1.onnx", 
+    parser.add_argument("--mode", type=str, choices=["detect", "track", "combined", "reels", "all", "pose", "hub-track"],
+                        default="all", help="Processing mode")
+    parser.add_argument("--video_path", type=str, required=True, help="Path to input video file")
+    parser.add_argument("--model_path", type=str, default="models/VballNetV1_seq9_grayscale_330_h288_w512.onnx",
                         help="Path to ONNX model file")
     parser.add_argument("--output_dir", type=str, default="output", 
                         help="Directory to save output files")
@@ -24,93 +28,89 @@ def main():
     parser.add_argument("--hub_model", type=str, default="https://hub.ultralytics.com/models/ITKRtcQHITZrgT2ZNpRq",
                         help="Ultralytics Hub model URL or ID")
     parser.add_argument("--api_key", type=str,
-                        default=os.getenv("ULTRALYTICS_HUB_API_KEY", "5ea02b4238fc9528408b8c36dcdb3834e11a9cbf58"),
+                        default=os.getenv("ULTRALYTICS_HUB_API_KEY"),
                         help="Ultralytics Hub API key")
+
+    # Track calculator specific
+    parser.add_argument("--fps", type=float, default=30.0, help="Frames per second")
+
+    # Pose specific
+    parser.add_argument("--track_file", type=str, help="Path to track JSON file (for pose mode)")
 
     args = parser.parse_args()
     
+    video_basename = os.path.splitext(os.path.basename(args.video_path))[0]
+    video_output_dir = os.path.join(args.output_dir, video_basename)
+    ball_csv = os.path.join(video_output_dir, "ball.csv")
+    tracks_dir = os.path.join(video_output_dir, "tracks")
+
+    python_exe = sys.executable
+
     if args.mode == "hub-track":
-        # Hub tracking mode
-        if not args.video_path:
-            print("Error: --video_path is required for hub-track mode")
+        if not args.api_key:
+            print("Error: --api_key or ULTRALYTICS_HUB_API_KEY environment variable is required for hub-track mode")
             return 1
+        from src.hub_inference import run_hub_inference
+        run_hub_inference(
+            video_path=args.video_path,
+            model_url=args.hub_model,
+            api_key=args.api_key,
+            output_dir=args.output_dir,
+            visualize=args.visualize
+        )
 
-        try:
-            from src.hub_inference import run_hub_inference
-            print("Hub tracking mode selected")
-            print(f"Video: {args.video_path}")
-            print(f"Model: {args.hub_model}")
+    elif args.mode == "detect" or args.mode == "all":
+        cmd = [
+            python_exe, "src/inference_onnx_seq_gray_v2.py",
+            "--video_path", args.video_path,
+            "--model_path", args.model_path,
+            "--output_dir", args.output_dir,
+            "--only_csv"
+        ]
+        if args.visualize:
+            cmd.append("--visualize")
+        run_cmd(cmd)
 
-            run_hub_inference(
-                video_path=args.video_path,
-                model_url=args.hub_model,
-                api_key=args.api_key,
-                output_dir=args.output_dir,
-                visualize=args.visualize
-            )
-        except ImportError as e:
-            print(f"Error importing hub inference module: {e}")
-            return 1
-        except Exception as e:
-            print(f"Error during hub inference: {e}")
-            return 1
+    if args.mode == "track" or args.mode == "all":
+        cmd = [
+            python_exe, "src/track_calculator.py",
+            "--csv_path", ball_csv,
+            "--output_dir", args.output_dir,
+            "--fps", str(args.fps)
+        ]
+        run_cmd(cmd)
 
-    elif args.mode == "track":
-        # Ball tracking mode
-        if not args.video_path:
-            print("Error: --video_path is required for tracking mode")
+    if args.mode == "combined" or args.mode == "all":
+        cmd = [
+            python_exe, "src/track_processor.py",
+            "--video_path", args.video_path,
+            "--output_dir", args.output_dir
+        ]
+        run_cmd(cmd)
+
+    if args.mode == "reels" or args.mode == "all":
+        cmd = [
+            python_exe, "src/make_reels.py",
+            "--video_path", args.video_path,
+            "--json_dir", tracks_dir,
+            "--output_dir", args.output_dir
+        ]
+        if args.visualize:
+            cmd.append("--visualize")
+        run_cmd(cmd)
+
+    if args.mode == "pose":
+        if not args.track_file:
+            print("Error: --track_file is required for pose mode")
             return 1
-            
-        # Import and run ball tracking
-        try:
-            from src.inference_onnx import main as track_main
-            # We would need to pass the args to the tracking module
-            print("Ball tracking mode selected")
-            print(f"Video: {args.video_path}")
-            print(f"Model: {args.model_path}")
-            print(f"Visualize: {args.visualize}")
-            # In a full implementation, we would call track_main with appropriate arguments
-        except ImportError as e:
-            print(f"Error importing tracking module: {e}")
-            return 1
-            
-    elif args.mode == "pose":
-        # Pose detection mode
-        if not args.track_file or not args.video_path:
-            print("Error: --track_file and --video_path are required for pose mode")
-            return 1
-            
-        # Import and run pose detection
-        try:
-            from src.pose_detector import add_pose_to_track_json
-            print("Pose detection mode selected")
-            print(f"Track file: {args.track_file}")
-            print(f"Video: {args.video_path}")
-            print(f"Visualize: {args.visualize}")
-            
-            add_pose_to_track_json(
-                track_file=args.track_file,
-                video_path=args.video_path,
-                output_dir=args.output_dir,
-                visualize=args.visualize
-            )
-        except ImportError as e:
-            print(f"Error importing pose detection module: {e}")
-            return 1
-        except Exception as e:
-            print(f"Error during pose detection: {e}")
-            return 1
-            
-    elif args.mode == "analyze":
-        # Analysis mode
-        print("Analysis mode selected")
-        print("This mode is not yet implemented")
-        
-    else:
-        print("Hello from fast-volleyball-tracking-inference!")
-        print("Use --mode to specify the processing mode")
-        print("Available modes: track, pose, analyze")
-        
+        from src.pose_detector import add_pose_to_track_json
+        add_pose_to_track_json(
+            track_file=args.track_file,
+            video_path=args.video_path,
+            output_dir=args.output_dir,
+            visualize=args.visualize
+        )
+
     return 0
 
 
