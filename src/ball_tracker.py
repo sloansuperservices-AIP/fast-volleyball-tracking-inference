@@ -62,10 +62,10 @@ class Track:
 
 
     def to_dict(self) -> Dict[str, Any]:
-        """Преобразует объект Track в словарь, пригодный для сериализации в JSON."""
+        """Converts the Track object to a dictionary suitable for JSON serialization."""
 
         def convert_numpy(obj):
-            """Конвертирует numpy-типы в стандартные Python-типы."""
+            """Converts numpy types to standard Python types."""
             if isinstance(obj, np.floating):
                 return float(obj)
             elif isinstance(obj, np.integer):
@@ -94,23 +94,23 @@ class Track:
         }
 
     def size(self) -> int:
-        # Возвращает разницу между last_frame и start_frame
+        # Returns the difference between last_frame and start_frame
         return self.last_frame - self.start_frame
 
     def duration_sec(self) -> float:
-        # Возвращает длительность трека в секундах
+        # Returns track duration in seconds
         sz = self.size()
         return sz / self.fps if self.fps > 0 else 0.0
 
     def get_x_range(self) -> float:
-        """Возвращает разницу между максимальным и минимальным значением x из истории positions."""
+        """Returns the difference between max and min x values from position history."""
         if not self.positions:
             return 0.0
         x_values = [pos[0][0] for pos in self.positions]
         return float(max(x_values) - min(x_values))
 
     def get_y_range(self) -> float:
-        """Возвращает разницу между максимальным и минимальным значением y из истории positions."""
+        """Returns the difference between max and min y values from position history."""
         if not self.positions:
             return 0.0
         y_values = [pos[0][1] for pos in self.positions]
