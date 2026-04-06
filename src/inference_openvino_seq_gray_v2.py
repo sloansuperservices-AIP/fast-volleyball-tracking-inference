@@ -2,7 +2,7 @@ import argparse
 import cv2
 import numpy as np
 import pandas as pd
-import onnxruntime as ort
+import openvino.runtime as ov
 from collections import deque
 import os
 import time
@@ -13,7 +13,7 @@ import queue
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Volleyball ball detection and tracking with ONNX"
+        description="Volleyball ball detection and tracking with OpenVINO"
     )
     parser.add_argument(
         "--video_path", type=str, required=True, help="Path to input video file"
@@ -28,7 +28,7 @@ def parse_args():
         help="Directory to save output video and CSV",
     )
     parser.add_argument(
-        "--model_path", type=str, required=True, help="Path to ONNX model file"
+        "--model_xml", type=str, required=True, help="Path to OpenVINO model XML file"
     )
     parser.add_argument(
         "--visualize",
@@ -45,60 +45,53 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_onnx_model(model_path):
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model not found: {model_path}")
-    session = ort.InferenceSession(
-        model_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
-    )
-    input_meta = session.get_inputs()
-    output_meta = session.get_outputs()
-    input_names = [inp.name for inp in input_meta]
-    output_names = [out.name for out in output_meta]
-    
-    # Determine input and output sequence lengths
-    input_shape = input_meta[0].shape
-    output_shape = output_meta[0].shape
+def load_openvino_model(model_xml):
+    if not os.path.exists(model_xml):
+        raise FileNotFoundError(f"Model not found: {model_xml}")
 
-    # sequence length is typically at index 1 for (batch, seq, ...)
+    core = ov.Core()
+    model = core.read_model(model_xml)
+    compiled_model = core.compile_model(model, "CPU") # Or "GPU" if available
+
+    input_layer = compiled_model.input(0)
+    output_layer = compiled_model.output(0)
+
+    input_shape = input_layer.shape
+    output_shape = output_layer.shape
+
+    # Determine input and output sequence lengths
     input_seq_len = input_shape[1] if len(input_shape) > 1 else 1
-    # For heatmaps it is (batch, out_seq, h, w), for grid it is (batch, out_seq * 3, h_g, w_g)
     output_channels = output_shape[1] if len(output_shape) > 1 else 1
 
     model_type = "heatmap"
     out_seq_len = output_channels
 
-    # Grid models have 3 channels per frame (visibility, x-offset, y-offset)
-    # and usually a much smaller spatial resolution (e.g., 48x27)
+    # Grid models check
     if len(output_shape) == 4 and output_shape[2] < 100:
         model_type = "grid"
         out_seq_len = output_channels // 3
 
-    has_gru = "h0" in input_names
+    # GRU check (heuristic, might need adjustment)
+    has_gru = len(compiled_model.inputs) > 1 and "h0" in [inp.get_any_name() for inp in compiled_model.inputs]
     h0_shape = None
     if has_gru:
-        for inp in input_meta:
-            if inp.name == "h0":
+        for inp in compiled_model.inputs:
+            if "h0" in inp.get_any_name():
                 h0_shape = inp.shape
                 break
         resolved_shape = []
         for dim in h0_shape:
-            if isinstance(dim, str) or dim is None:
-                if dim in ["batch", "batch_size", None]:
-                    resolved_shape.append(1)
-                elif "hidden" in str(dim).lower():
-                    resolved_shape.append(512)
-                else:
-                    resolved_shape.append(1)
+            if dim.is_dynamic:
+                resolved_shape.append(1) # Default batch 1
             else:
-                resolved_shape.append(dim)
+                resolved_shape.append(dim.get_length())
         h0_shape = tuple(resolved_shape)
-        
-    print(f"✅ Model loaded: {model_path}")
+
+    print(f"✅ OpenVINO Model loaded: {model_xml}")
     print(
         f"   Type: {model_type}, In-Seq: {input_seq_len}, Out-Seq: {out_seq_len}, Has GRU: {has_gru}"
     )
-    return session, has_gru, out_seq_len, h0_shape, input_seq_len, input_names, output_names, model_type
+    return compiled_model, has_gru, out_seq_len, h0_shape, input_seq_len, model_type
 
 
 def initialize_video(video_path):
@@ -119,7 +112,7 @@ def setup_output_writer(
         return None, None
     video_dir = os.path.join(output_dir, video_basename)
     os.makedirs(video_dir, exist_ok=True)
-    output_path = os.path.join(video_dir, "predict.mp4")
+    output_path = os.path.join(video_dir, "predict_ov.mp4")
     out_writer = cv2.VideoWriter(
         output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (frame_width, frame_height)
     )
@@ -131,7 +124,7 @@ def setup_csv_file(video_basename, output_dir):
         return None
     video_dir = os.path.join(output_dir, video_basename)
     os.makedirs(video_dir, exist_ok=True)
-    csv_path = os.path.join(video_dir, "ball.csv")
+    csv_path = os.path.join(video_dir, "ball_ov.csv")
     pd.DataFrame(columns=["Frame", "Visibility", "X", "Y"]).to_csv(
         csv_path, index=False
     )
@@ -178,7 +171,6 @@ def postprocess_output(
             else:
                 results.append((0, 0, 0))
     else:  # Grid
-        # output shape is (1, out_seq_len * 3, grid_h, grid_w)
         grid_h, grid_w = output.shape[2], output.shape[3]
         for frame_idx in range(out_seq_len):
             vis_map = output[0, frame_idx * 3, :, :]
@@ -192,8 +184,6 @@ def postprocess_output(
                 x_offset = x_offset_map[grid_y, grid_x]
                 y_offset = y_offset_map[grid_y, grid_x]
 
-                # Coordinate on grid = grid_index + offset
-                # Final coordinate = grid_coord * (input_size / grid_dimension)
                 cx = (grid_x + x_offset) * (input_width / grid_w)
                 cy = (grid_y + y_offset) * (input_height / grid_h)
                 results.append((1, int(cx), int(cy)))
@@ -214,22 +204,17 @@ def draw_track(
     return frame
 
 
-def run_inference(session, input_tensor, has_gru, h0, input_names, output_names):
-    """Helper для инференса с поддержкой GRU."""
-    inputs = {input_names[0]: input_tensor}  # Основной инпут (кадры)
+def run_inference(compiled_model, input_tensor, has_gru, h0):
+    inputs = {compiled_model.input(0): input_tensor}
     if has_gru:
-        if len(input_names) < 2:
-            raise ValueError("GRU model expects at least 2 inputs: images and h0")
-        inputs[input_names[1]] = h0  # Добавляем h0
-    
-    outputs = session.run(output_names, inputs)
-    
-    heatmaps = outputs[0]  # Первый аутпут — heatmaps
-    new_h0 = None
-    if has_gru:
-        if len(outputs) < 2:
-            raise ValueError("GRU model should output at least 2 values: heatmaps and hn")
-        new_h0 = outputs[1]  # Второе — новое скрытое состояние
+        inputs[compiled_model.input(1)] = h0
+
+    results = compiled_model(inputs)
+
+    output_list = list(results.values())
+    heatmaps = output_list[0]
+    new_h0 = output_list[1] if has_gru and len(output_list) > 1 else None
+
     return heatmaps, new_h0
 
 
@@ -249,8 +234,8 @@ def read_frames(cap, frame_queue, max_frames):
 def main():
     args = parse_args()
     input_width, input_height = 512, 288
-    
-    model_session, has_gru, out_seq_len, h0_shape, in_seq_len, input_names, output_names, model_type = load_onnx_model(args.model_path)
+
+    compiled_model, has_gru, out_seq_len, h0_shape, in_seq_len, model_type = load_openvino_model(args.model_xml)
 
     cap, frame_width, frame_height, fps, total_frames = initialize_video(
         args.video_path
@@ -265,11 +250,9 @@ def main():
     track_points = deque(maxlen=args.track_length)
     frame_index = 0
     frame_queue = queue.Queue(maxsize=2)
-    
-    # Initialize GRU state
+
     h0 = np.zeros(h0_shape, dtype=np.float32) if has_gru and h0_shape else None
 
-    # Start frame reading thread
     def frame_reader():
         while cap.isOpened():
             read_frames(cap, frame_queue, in_seq_len)
@@ -277,20 +260,16 @@ def main():
     reader_thread = threading.Thread(target=frame_reader, daemon=True)
     reader_thread.start()
 
-    pbar = tqdm(total=total_frames, desc="Processing video", unit="frame")
+    pbar = tqdm(total=total_frames, desc="Processing video (OpenVINO)", unit="frame")
     exit_flag = False
     while True:
         start_time = time.time()
-
-        # Get batch of frames
         frames = frame_queue.get()
         if frames is None:
             break
 
-        # Preprocess frames in batch
         processed_frames = preprocess_frames(frames, input_height, input_width)
 
-        # Fill buffer if not enough frames
         while len(frame_buffer) < in_seq_len:
             frame_buffer.append(
                 processed_frames[0]
@@ -298,21 +277,17 @@ def main():
                 else np.zeros((input_height, input_width), dtype=np.float32)
             )
 
-        # Update buffer with new frames
         for pf in processed_frames:
             frame_buffer.append(pf)
 
-        # Prepare input tensor
-        input_tensor = np.stack(frame_buffer, axis=2)  # (height, width, in_seq_len)
-        input_tensor = np.expand_dims(input_tensor, axis=0)  # (1, height, width, in_seq_len)
-        input_tensor = np.transpose(input_tensor, (0, 3, 1, 2))  # (1, in_seq_len, 288, 512)
+        input_tensor = np.stack(frame_buffer, axis=2)
+        input_tensor = np.expand_dims(input_tensor, axis=0)
+        input_tensor = np.transpose(input_tensor, (0, 3, 1, 2))
 
-        # Run inference with GRU support
-        output, new_h0 = run_inference(model_session, input_tensor, has_gru, h0, input_names, output_names)
+        output, new_h0 = run_inference(compiled_model, input_tensor, has_gru, h0)
         if has_gru and new_h0 is not None:
             h0 = new_h0
 
-        # Process predictions for all frames
         predictions = postprocess_output(
             output,
             input_height=input_height,
@@ -321,14 +296,10 @@ def main():
             model_type=model_type
         )
 
-        # Save results and visualize for each frame in the batch
         num_preds = len(predictions)
         num_frames = len(frames)
         for i in range(num_frames):
-            # Match prediction to frame: usually the last 'out_seq_len' heatmaps
-            # correspond to the most recent frames.
             pred_idx = i + num_preds - num_frames
-
             if pred_idx >= 0 and pred_idx < num_preds:
                 visibility, x, y = predictions[pred_idx]
             else:
@@ -354,8 +325,8 @@ def main():
                 vis_frame = frames[i].copy()
                 vis_frame = draw_track(vis_frame, track_points)
                 if args.visualize:
-                    cv2.namedWindow("Ball Tracking", cv2.WINDOW_NORMAL)
-                    cv2.imshow("Ball Tracking", vis_frame)
+                    cv2.namedWindow("Ball Tracking (OV)", cv2.WINDOW_NORMAL)
+                    cv2.imshow("Ball Tracking (OV)", vis_frame)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         exit_flag = True
                         break
@@ -364,9 +335,6 @@ def main():
         if exit_flag:
             break
 
-        end_time = time.time()
-        batch_time = end_time - start_time
-        batch_fps = len(frames) / batch_time if batch_time > 0 else 0
         pbar.update(len(frames))
         frame_index += len(frames)
 
