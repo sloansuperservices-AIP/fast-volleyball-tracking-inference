@@ -207,7 +207,17 @@ class TrackCalculator:
     def _save_tracks_to_json(self) -> None:
         """Save each track to a separate JSON file."""
         csv_name = os.path.splitext(os.path.basename(self.csv_path))[0]
-        video_basename = os.path.basename(os.path.dirname(self.csv_path)) or csv_name.replace("_predict_ball", "")
+        # Standardized path: output_dir/video_basename/ball.csv
+        # If csv is in a directory, use that directory name as video_basename
+        parent_dir = os.path.dirname(self.csv_path)
+        video_basename = os.path.basename(parent_dir) if parent_dir else csv_name.replace("_predict_ball", "").replace("ball", "")
+
+        if not video_basename or video_basename == os.path.basename(self.output_dir):
+            video_basename = csv_name.replace("_predict_ball", "").replace("ball", "")
+
+        if not video_basename:
+            video_basename = "output"
+
         tracks_dir = os.path.join(self.output_dir, video_basename, "tracks")
         os.makedirs(tracks_dir, exist_ok=True)
 
