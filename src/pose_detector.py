@@ -289,30 +289,23 @@ def add_pose_to_track_json(track_file: str, video_path: str, output_dir: str = "
 def main():
     """Example usage of the PoseDetector."""
     parser = argparse.ArgumentParser(description="Volleyball Pose Detection")
-    parser.add_argument("--track_file", type=str, help="Path to track JSON file")
-    parser.add_argument("--video_path", type=str, help="Path to video file")
+    parser.add_argument("--track_file", type=str, required=True, help="Path to track JSON file")
+    parser.add_argument("--video_path", type=str, required=True, help="Path to video file")
+    parser.add_argument("--output_dir", type=str, default="output/pose", help="Output directory")
     parser.add_argument("--visualize", action="store_true", help="Enable visualization")
-    
+
     args = parser.parse_args()
-    
-    # Example usage
-    pose_detector = PoseDetector()
-    
-    # Process a track file if provided
-    if args.track_file and args.video_path:
-        if os.path.exists(args.track_file):
-            add_pose_to_track_json(args.track_file, args.video_path, visualize=args.visualize)
-        else:
-            print(f"Track file not found: {args.track_file}")
+
+    # Process a track file
+    if os.path.exists(args.track_file):
+        add_pose_to_track_json(
+            args.track_file,
+            args.video_path,
+            output_dir=args.output_dir,
+            visualize=args.visualize
+        )
     else:
-        # Process a track file
-        track_file = "track_json/track_0229.json"
-        video_path = "path/to/video.mp4"  # You would provide the actual video path
-        
-        if os.path.exists(track_file):
-            add_pose_to_track_json(track_file, video_path)
-        else:
-            print(f"Track file not found: {track_file}")
+        print(f"Track file not found: {args.track_file}")
 
 
 if __name__ == "__main__":
