@@ -1,10 +1,10 @@
-import numpy as np
-from collections import deque
-from scipy.spatial import distance
-from dataclasses import dataclass, field
 import json
-from typing import List, Tuple, Dict, Optional, Any
-import dataclasses
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+from scipy.spatial import distance
 
 
 @dataclass
@@ -43,12 +43,12 @@ class Track:
 
         pos_list = list(self.positions)
         for i in range(1, len(pos_list)):
-            p1 = np.array(pos_list[i-1][0])
+            p1 = np.array(pos_list[i - 1][0])
             p2 = np.array(pos_list[i][0])
             dist = np.linalg.norm(p2 - p1)
             total_dist += dist
 
-            f1 = pos_list[i-1][1]
+            f1 = pos_list[i - 1][1]
             f2 = pos_list[i][1]
             dt = f2 - f1
             if dt > 0:
@@ -60,12 +60,10 @@ class Track:
         self.max_speed = float(max(speeds)) if speeds else 0.0
         self.avg_speed = float(np.mean(speeds)) if speeds else 0.0
 
-
     def to_dict(self) -> Dict[str, Any]:
-        """Преобразует объект Track в словарь, пригодный для сериализации в JSON."""
+        """Converts Track object to JSON-serializable dictionary."""
 
         def convert_numpy(obj):
-            """Конвертирует numpy-типы в стандартные Python-типы."""
             if isinstance(obj, np.floating):
                 return float(obj)
             elif isinstance(obj, np.integer):
@@ -77,9 +75,7 @@ class Track:
             return obj
 
         return {
-            "positions": [
-                (convert_numpy(pos[0]), convert_numpy(pos[1])) for pos in self.positions
-            ],
+            "positions": [(convert_numpy(pos[0]), convert_numpy(pos[1])) for pos in self.positions],
             "prediction": [convert_numpy(p) for p in self.prediction],
             "last_frame": convert_numpy(self.last_frame),
             "start_frame": convert_numpy(self.start_frame),
@@ -94,23 +90,19 @@ class Track:
         }
 
     def size(self) -> int:
-        # Возвращает разницу между last_frame и start_frame
         return self.last_frame - self.start_frame
 
     def duration_sec(self) -> float:
-        # Возвращает длительность трека в секундах
         sz = self.size()
         return sz / self.fps if self.fps > 0 else 0.0
 
     def get_x_range(self) -> float:
-        """Возвращает разницу между максимальным и минимальным значением x из истории positions."""
         if not self.positions:
             return 0.0
         x_values = [pos[0][0] for pos in self.positions]
         return float(max(x_values) - min(x_values))
 
     def get_y_range(self) -> float:
-        """Возвращает разницу между максимальным и минимальным значением y из истории positions."""
         if not self.positions:
             return 0.0
         y_values = [pos[0][1] for pos in self.positions]
@@ -148,7 +140,6 @@ class BallTracker:
         self.max_distance = max_distance
         self.ball_diameter_cm = ball_diameter_cm
 
-
     def box_to_position(self, box):
         x1, y1, x2, y2 = box["x1"], box["y1"], box["x2"], box["y2"]
         center_x = (x1 + x2) / 2
@@ -170,16 +161,12 @@ class BallTracker:
         distance_matrix = np.zeros((len(active_tracks), len(unused_detections)))
         for i, (track_id, track) in enumerate(active_tracks):
             if len(track.positions) > 0:
-                last_pos = track.positions[-1][0:2]
                 last_pos = track.prediction
                 for j, det in enumerate(unused_detections):
-                    center_x, center_y, diameter = self.box_to_position(det)
+                    center_x, center_y, _ = self.box_to_position(det)
                     det_pos = [center_x, center_y]
-                    distance_matrix[i, j] = distance.euclidean(
-                        last_pos[0:2], det_pos[0:2]
-                    )
+                    distance_matrix[i, j] = distance.euclidean(last_pos[0:2], det_pos[0:2])
 
-        matched_pairs = []
         used_detection_indices = set()
         while True:
             if distance_matrix.size == 0 or np.all(np.isinf(distance_matrix)):
@@ -194,7 +181,6 @@ class BallTracker:
             det = unused_detections[j]
 
             self._update_track(track_id, det, frame_number)
-            matched_pairs.append((track_id, j))
             used_detection_indices.add(j)
 
             distance_matrix[i, :] = np.inf
@@ -202,14 +188,10 @@ class BallTracker:
 
         for j, det in enumerate(unused_detections):
             if j not in used_detection_indices:
-                reason = (
-                    "No active tracks"
-                    if not active_tracks
-                    else f"Distance to nearest track > {self.max_distance} pixels; min_val = {min_val:.2f}"
-                )
+                reason = "No active tracks" if not active_tracks else f"Distance > {self.max_distance}"
                 self._add_track(det, frame_number, reason)
 
-        return self._get_main_ball(deleted_tracks)
+        return self._get_results(deleted_tracks)
 
     def _add_track(self, detection, frame_number, reason="Unknown"):
         track = Track()
@@ -224,9 +206,6 @@ class BallTracker:
         track.ball_sizes = deque([diameter], maxlen=self.buffer_size)
         track.reason = reason
         self.tracks[self.next_id] = track
-        print(
-            f"New track {self.next_id} created at frame {frame_number}, position ({center_x:.1f}, {center_y:.1f}), reason: {reason}"
-        )
         self.next_id += 1
 
     def _update_track(self, track_id, detection, frame_number):
@@ -249,61 +228,42 @@ class BallTracker:
         else:
             self.tracks[track_id].prediction = position
 
-    def _get_main_ball(self, deleted_tracks):
+    def _get_results(self, deleted_tracks):
         main_ball = None
         max_score = -1
-
         for track_id, track in self.tracks.items():
-            positions = [p for p, _ in track.positions]
-            if len(positions) < 3:
+            if len(track.positions) < 3:
                 continue
-
+            positions = [p for p, _ in track.positions]
             time_steps = [f for _, f in track.positions]
             velocities = []
             for i in range(1, len(positions)):
                 dt = time_steps[i] - time_steps[i - 1]
-                dx = positions[i][0] - positions[i - 1][0]
-                dy = positions[i][1] - positions[i - 1][1]
-                velocities.append((dx / dt, dy / dt))
-
-            var = np.var(velocities, axis=0)
-            stability = 1 / (np.sum(var) + 1e-5)
+                if dt > 0:
+                    velocities.append(((positions[i][0] - positions[i - 1][0]) / dt, (positions[i][1] - positions[i - 1][1]) / dt))
+            if not velocities:
+                continue
+            stability = 1 / (np.sum(np.var(velocities, axis=0)) + 1e-5)
             length_weight = np.log(len(positions) + 1)
-            total_score = stability * length_weight
-
-            if total_score > max_score:
-                max_score = total_score
-                main_ball = track_id
-
+            score = stability * length_weight
+            if score > max_score:
+                max_score, main_ball = score, track_id
         return main_ball, self.tracks, deleted_tracks
 
     def to_json(self) -> str:
-        data = {
+        return json.dumps({
             "next_id": self.next_id,
-            "tracks": {
-                str(track_id): track.to_dict()
-                for track_id, track in self.tracks.items()
-            },
+            "tracks": {str(tid): t.to_dict() for tid, t in self.tracks.items()},
             "buffer_size": self.buffer_size,
             "max_disappeared": self.max_disappeared,
             "max_distance": self.max_distance,
-        }
-        return json.dumps(data)
+        })
 
     @classmethod
     def from_json(cls, json_str: str) -> "BallTracker":
         data = json.loads(json_str)
-        tracker = cls(
-            buffer_size=data["buffer_size"],
-            max_disappeared=data["max_disappeared"],
-            max_distance=data["max_distance"],
-        )
+        tracker = cls(buffer_size=data["buffer_size"], max_disappeared=data["max_disappeared"], max_distance=data["max_distance"])
         tracker.next_id = data["next_id"]
-
-        for track_id_str, track_data in data["tracks"].items():
-            track_id = int(track_id_str)
-            tracker.tracks[track_id] = Track.from_dict(
-                track_data, buffer_size=tracker.buffer_size
-            )
-
+        for tid_str, tdata in data["tracks"].items():
+            tracker.tracks[int(tid_str)] = Track.from_dict(tdata, buffer_size=tracker.buffer_size)
         return tracker
