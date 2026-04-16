@@ -18,9 +18,15 @@ import cv2
 import json
 import argparse
 from typing import List, Optional
-from ball_tracker import Track
 from tqdm import tqdm
-import time  # <-- NEW: For timing
+import time
+
+try:
+    from src.ball_tracker import Track
+    from src.constants import DEFAULT_FPS, DEFAULT_FADE_DURATION
+except ImportError:
+    from ball_tracker import Track
+    from constants import DEFAULT_FPS, DEFAULT_FADE_DURATION
 
 
 class TrackProcessor:
@@ -30,7 +36,7 @@ class TrackProcessor:
         video_path: str,
         output_path: Optional[str] = None,
         split_dir: Optional[str] = None,
-        fps: float = 30.0,
+        fps: float = DEFAULT_FPS,
     ):
         self.json_dir = json_dir
         self.video_path = video_path
@@ -84,7 +90,7 @@ class TrackProcessor:
         # Video writers
         combined_writer = None
         if self.output_path and not self.split_dir:
-            fourcc = cv2.VideoWriter_fourcc(*"XVID")
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             combined_writer = cv2.VideoWriter(
                 self.output_path, fourcc, fps, (width, height)
             )
@@ -92,8 +98,7 @@ class TrackProcessor:
         if self.split_dir:
             os.makedirs(self.split_dir, exist_ok=True)
 
-        fade_duration = 0.5
-        fade_frames = int(fps * fade_duration)
+        fade_frames = int(fps * DEFAULT_FADE_DURATION)
 
         processed_count = 0
         total_tracks = len(self.tracks)
@@ -163,7 +168,6 @@ class TrackProcessor:
                     px, py = int(pos[0]), int(pos[1])
 
                     # Calculate opacity based on how old the position is
-                    # Newer positions are more opaque
                     age = frame_num - pf
                     alpha = max(0, 1 - (age / tail_length))
 
@@ -171,7 +175,6 @@ class TrackProcessor:
 
                     # Only draw the circle if it's visible enough
                     if alpha > 0.1:
-                         # We can't directly draw with alpha in OpenCV without overlay
                         overlay = frame.copy()
                         cv2.circle(overlay, (px, py), 8, color, -1)
                         cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
@@ -187,7 +190,7 @@ class TrackProcessor:
                         stats_text_lines = [
                             f"ID: {track_id}",
                             f"Time: {elapsed_time:.2f}s",
-                            f"Speed: {track.avg_speed:.1f} px/f", # Ideally calculate instantaneous speed
+                            f"Speed: {track.avg_speed:.1f} px/f",
                             f"Max H: {track.max_height:.1f} px"
                         ]
 
@@ -240,11 +243,11 @@ class TrackProcessor:
                         cv2.destroyAllWindows()
                         return
 
-                # Write clean frame
+                # Write frames
                 if combined_writer:
-                    combined_writer.write(clean_frame)
+                    combined_writer.write(frame)
                 if track_writer:
-                    track_writer.write(clean_frame)
+                    track_writer.write(frame)
 
                 last_clean_frame = clean_frame.copy()
                 frame_num += 1
@@ -330,7 +333,7 @@ def main():
         "--video_path", type=str, required=True, help="Path to source video"
     )
     parser.add_argument(
-        "--output_path", type=str, default=None, help="Combined output video (AVI)"
+        "--output_path", type=str, default=None, help="Combined output video (MP4)"
     )
     parser.add_argument(
         "--split_dir",
@@ -342,7 +345,7 @@ def main():
         "--output_dir", type=str, default=None, help="Root output directory"
     )
     parser.add_argument(
-        "--fps", type=float, default=30.0, help="Output FPS if video has none"
+        "--fps", type=float, default=DEFAULT_FPS, help="Output FPS if video has none"
     )
     args = parser.parse_args()
 
@@ -352,7 +355,6 @@ def main():
         args.json_dir = os.path.join(args.output_dir, base_name, "tracks")
     if args.output_path is None and args.output_dir and not args.split_dir:
         args.output_path = os.path.join(args.output_dir, base_name, "combined.mp4")
-    # If split_dir is provided, use it as-is; otherwise keep combined mode when output_dir is set.
 
     mode = "Interactive visualization"
     if args.split_dir:

@@ -1,26 +1,29 @@
 [project]
 name = "fast-volleyball-tracking-inference"
 version = "0.1.0"
-description = "Add your description here"
+description = "High-speed volleyball tracking and reel generation"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "filterpy>=1.4.5",
-    "onnxruntime>=1.22.0",
-    "opencv-contrib-python>=4.12.0.88",
-    "opencv-python>=4.12.0.88",
-    "pandas>=2.3.1",
-    "scipy>=1.16.0",
-    "seaborn>=0.13.2",
+    "onnxruntime>=1.20.0",
+    "opencv-contrib-python>=4.10.0",
+    "opencv-python>=4.10.0",
+    "pandas>=2.0.0",
+    "scipy>=1.10.0",
+    "seaborn>=0.13.0",
     "tabulate>=0.9.0",
-    "tqdm>=4.67.1",
-    "ultralytics>=8.0.0",
+    "tqdm>=4.66.0",
+    "ultralytics>=8.3.0",
     "matplotlib>=3.7.0",
-    "seaborn>=0.12.0",
+    "openvino>=2025.0.0",
+    "mediapipe>=0.10.0",
 ]
-
 
 [project.optional-dependencies]
 gpu = [
-    "onnxruntime-gpu>=1.22.0",  # GPU-версия ONNX
+    "onnxruntime-gpu>=1.20.0",
+]
+dev = [
+    "pytest>=8.0.0",
 ]
