@@ -1,12 +1,36 @@
 #!/usr/bin/env python3
-import pandas as pd
-import numpy as np
-import os
 import argparse
 import json
+import os
 from typing import List
-from ball_tracker import BallTracker, Track
-from track_utils import find_cyclic_sequences, find_rolling_sequences
+
+import numpy as np
+import pandas as pd
+
+try:
+    from src.ball_tracker import BallTracker, Track
+    from src.constants import (
+        DEFAULT_FPS,
+        DEFAULT_MAX_DISTANCE,
+        DEFAULT_MIN_DURATION_SEC,
+        DEFAULT_MAX_X_DISPLACEMENT,
+        DEFAULT_MIN_Y_DISPLACEMENT,
+        DEFAULT_BOUNCE_FRAMES,
+        DEFAULT_DETECTION_BOX_RADIUS,
+    )
+    from src.track_utils import find_cyclic_sequences, find_rolling_sequences
+except ImportError:
+    from ball_tracker import BallTracker, Track
+    from constants import (
+        DEFAULT_FPS,
+        DEFAULT_MAX_DISTANCE,
+        DEFAULT_MIN_DURATION_SEC,
+        DEFAULT_MAX_X_DISPLACEMENT,
+        DEFAULT_MIN_Y_DISPLACEMENT,
+        DEFAULT_BOUNCE_FRAMES,
+        DEFAULT_DETECTION_BOX_RADIUS,
+    )
+    from track_utils import find_cyclic_sequences, find_rolling_sequences
 
 
 class TrackCalculator:
@@ -14,12 +38,12 @@ class TrackCalculator:
         self,
         csv_path: str,
         output_dir: str = "output",
-        fps: float = 30.0,
-        max_distance: float = 200.0,
-        min_duration_sec: float = 1.0,
-        max_x_displacement: float = 20.0,
-        min_y_displacement: float = 50.0,
-        bounce_frames: int = 10,
+        fps: float = DEFAULT_FPS,
+        max_distance: float = DEFAULT_MAX_DISTANCE,
+        min_duration_sec: float = DEFAULT_MIN_DURATION_SEC,
+        max_x_displacement: float = DEFAULT_MAX_X_DISPLACEMENT,
+        min_y_displacement: float = DEFAULT_MIN_Y_DISPLACEMENT,
+        bounce_frames: int = DEFAULT_BOUNCE_FRAMES,
     ):
         self.csv_path = csv_path
         self.output_dir = output_dir
@@ -44,6 +68,11 @@ class TrackCalculator:
         df["Visibility"] = pd.to_numeric(df["Visibility"], errors="coerce")
         df["X"] = pd.to_numeric(df["X"], errors="coerce")
         df["Y"] = pd.to_numeric(df["Y"], errors="coerce")
+        # Handle Radius if present
+        if "Radius" not in df.columns:
+            df["Radius"] = 0
+        df["Radius"] = pd.to_numeric(df["Radius"], errors="coerce").fillna(0)
+
         df.loc[(df["X"] == -1) | (df["Visibility"] == 0), ["X", "Y"]] = np.nan
         return df
 
@@ -74,28 +103,22 @@ class TrackCalculator:
                 break
 
         # Trim positions if start/end frames were updated
-        if (
-            track.start_frame != track.start_frame
-            or track.last_frame != track.last_frame
-        ):
-            track.positions = [
-                pos
-                for pos in track.positions
-                if track.start_frame <= pos[1] <= track.last_frame
-            ]
+        track.positions = [
+            pos
+            for pos in track.positions
+            if track.start_frame <= pos[1] <= track.last_frame
+        ]
         return track
 
     def _filter_short_tracks(self, episodes: List[Track]) -> List[Track]:
         """Filter, extend, merge, and clean up tracks."""
-        # 1. Filter by vertical range
-        # episodes = [ep for ep in episodes if ep.get_y_range() >= 1080 / 4.0]
         episodes = [self._trim_bounce_start(ep) for ep in episodes]
 
         # 2. Keep only tracks longer than minimum duration
-        long_tracks = episodes # DISABLED for debugging [ep for ep in episodes if ep.duration_sec() >= self.min_duration_sec]
-        sorted_tracks = sorted(
-            long_tracks, key=lambda x: x.duration_sec(), reverse=True
-        )
+        long_tracks = [
+            ep for ep in episodes if ep.duration_sec() >= self.min_duration_sec
+        ]
+        sorted_tracks = sorted(long_tracks, key=lambda x: x.duration_sec(), reverse=True)
 
         # 3. Remove overlapping tracks (keep longest)
         filtered = []
@@ -158,7 +181,7 @@ class TrackCalculator:
         return sorted(merged, key=lambda x: x.start_frame)
 
     def _process_detections(self, df: pd.DataFrame) -> None:
-        """Run tracker and collect completed tracks."""
+        """Run tracker and collect completed tracks. Optimized with groupby."""
         tracker = BallTracker(
             buffer_size=2500,
             max_disappeared=40,
@@ -167,22 +190,30 @@ class TrackCalculator:
         )
         close_tracks = []
 
-        for frame_num in sorted(df["Frame"].dropna().astype(int).unique()):
-            frame_rows = df[df["Frame"] == frame_num]
+        # Optimization: groupby('Frame') and iterate once
+        grouped = df.dropna(subset=["Frame", "X", "Y"]).groupby("Frame")
+
+        all_frames = sorted(df["Frame"].dropna().unique())
+
+        for frame_num in all_frames:
             detections = []
-            for _, row in frame_rows.iterrows():
-                if not np.isnan(row["X"]) and not np.isnan(row["Y"]):
+            if frame_num in grouped.groups:
+                frame_data = grouped.get_group(frame_num)
+                for x, y, vis, rad in zip(
+                    frame_data["X"], frame_data["Y"], frame_data["Visibility"], frame_data["Radius"]
+                ):
                     detections.append(
                         {
-                            "x1": row["X"] - 20,
-                            "y1": row["Y"] - 20,
-                            "x2": row["X"] + 20,
-                            "y2": row["Y"] + 20,
-                            "confidence": row["Visibility"],
+                            "x1": x - DEFAULT_DETECTION_BOX_RADIUS,
+                            "y1": y - DEFAULT_DETECTION_BOX_RADIUS,
+                            "x2": x + DEFAULT_DETECTION_BOX_RADIUS,
+                            "y2": y + DEFAULT_DETECTION_BOX_RADIUS,
+                            "confidence": vis,
+                            "radius": rad,
                             "cls_id": 0,
                         }
                     )
-            _, _, close_track = tracker.update(detections, frame_num)
+            _, _, close_track = tracker.update(detections, int(frame_num))
             close_tracks.extend(close_track)
 
         episodes = []
@@ -211,8 +242,9 @@ class TrackCalculator:
         tracks_dir = os.path.join(self.output_dir, video_basename, "tracks")
         os.makedirs(tracks_dir, exist_ok=True)
 
-        for track in self.tracks:
-            track.calculate_stats()  # Calculate statistics before saving
+        for i, track in enumerate(self.tracks):
+            track.track_id = i + 1 # Re-assign continuous IDs
+            track.calculate_stats()
             file_path = os.path.join(tracks_dir, f"track_{track.track_id:04d}.json")
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(track.to_dict(), f, indent=2, ensure_ascii=False)
@@ -233,21 +265,21 @@ def main():
     parser.add_argument(
         "--output_dir", type=str, default="output", help="Root output directory for JSON"
     )
-    parser.add_argument("--fps", type=float, default=30.0, help="Frames per second")
+    parser.add_argument("--fps", type=float, default=DEFAULT_FPS, help="Frames per second")
     parser.add_argument(
-        "--max_distance", type=float, default=200.0, help="Max tracking distance"
+        "--max_distance", type=float, default=DEFAULT_MAX_DISTANCE, help="Max tracking distance"
     )
     parser.add_argument(
-        "--min_duration_sec", type=float, default=1.0, help="Minimum track duration"
+        "--min_duration_sec", type=float, default=DEFAULT_MIN_DURATION_SEC, help="Minimum track duration"
     )
     parser.add_argument(
-        "--max_x_displacement", type=float, default=20.0, help="Max X displacement"
+        "--max_x_displacement", type=float, default=DEFAULT_MAX_X_DISPLACEMENT, help="Max X displacement"
     )
     parser.add_argument(
-        "--min_y_displacement", type=float, default=50.0, help="Min Y displacement"
+        "--min_y_displacement", type=float, default=DEFAULT_MIN_Y_DISPLACEMENT, help="Min Y displacement"
     )
     parser.add_argument(
-        "--bounce_frames", type=int, default=10, help="Frames to analyze bounce"
+        "--bounce_frames", type=int, default=DEFAULT_BOUNCE_FRAMES, help="Frames to analyze bounce"
     )
     args = parser.parse_args()
 
