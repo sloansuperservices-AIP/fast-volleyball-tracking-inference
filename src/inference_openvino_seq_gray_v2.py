@@ -2,18 +2,25 @@ import argparse
 import cv2
 import numpy as np
 import pandas as pd
-import onnxruntime as ort
-from collections import deque
 import os
 import time
 from tqdm import tqdm
 import threading
 import queue
 import logging
+from collections import deque
+
+try:
+    from openvino.runtime import Core
+except ImportError:
+    try:
+        from openvino import Core
+    except ImportError:
+        Core = None
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-LOG = logging.getLogger("inference")
+LOG = logging.getLogger("inference_ov")
 
 # Ball size detection constants
 BALL_SIZE_HISTORY = 12
@@ -26,7 +33,7 @@ BALL_ROI_HALF_SIZE = 48
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Volleyball ball detection and tracking with ONNX"
+        description="Volleyball ball detection and tracking with OpenVINO"
     )
     parser.add_argument(
         "--video_path", type=str, required=True, help="Path to input video file"
@@ -41,7 +48,7 @@ def parse_args():
         help="Directory to save output video and CSV",
     )
     parser.add_argument(
-        "--model_path", type=str, required=True, help="Path to ONNX model file"
+        "--model_path", type=str, required=True, help="Path to OpenVINO model file (.xml)"
     )
     parser.add_argument(
         "--visualize",
@@ -55,42 +62,37 @@ def parse_args():
         default=False,
         help="Save only CSV, skip video output",
     )
+    parser.add_argument(
+        "--device", type=str, default="CPU", help="OpenVINO device (CPU, GPU, etc.)"
+    )
     return parser.parse_args()
 
 
-def load_onnx_model(model_path):
+def load_ov_model(model_path, device="CPU"):
+    if Core is None:
+        raise ImportError("OpenVINO is not installed.")
+
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model not found: {model_path}")
-    session = ort.InferenceSession(
-        model_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
-    )
-    input_names = [inp.name for inp in session.get_inputs()]
-    output_names = [out.name for out in session.get_outputs()]
-    
+
+    core = Core()
+    model = core.read_model(model_path)
+    compiled_model = core.compile_model(model, device)
+
+    input_layer = compiled_model.input(0)
+    output_layer = compiled_model.output(0)
+
+    input_names = [inp.get_any_name() for inp in compiled_model.inputs]
+    output_names = [out.get_any_name() for out in compiled_model.outputs]
+
     has_gru = "h0" in input_names
     h0_shape = None
     if has_gru:
-        for inp in session.get_inputs():
-            if inp.name == "h0":
-                h0_shape = inp.shape
+        for inp in compiled_model.inputs:
+            if inp.get_any_name() == "h0":
+                h0_shape = inp.get_partial_shape().get_shape()
                 break
-        if h0_shape is None:
-            raise ValueError("Could not determine h0 shape for GRU model.")
-        resolved_shape = []
-        for dim in h0_shape:
-            if isinstance(dim, str) or dim is None:
-                if dim in ["batch", "batch_size", None]:
-                    resolved_shape.append(1)
-                elif "hidden" in str(dim).lower():
-                    resolved_shape.append(512)  # Адаптируй под твою модель, если hidden size другой
-                else:
-                    raise ValueError(
-                        f"Unknown symbolic dimension '{dim}' in h0_shape: {h0_shape}"
-                    )
-            else:
-                resolved_shape.append(dim)
-        h0_shape = tuple(resolved_shape)
-    
+
     # Determine sequence length from model filename
     if "seq15" in model_path.lower():
         out_dim = 15
@@ -101,12 +103,12 @@ def load_onnx_model(model_path):
     else:
         out_dim = 3
         batch_size = 3
-        
-    print(f"✅ Model loaded: {model_path}")
+
+    print(f"✅ OpenVINO Model loaded: {model_path} on {device}")
     print(
         f"   Has GRU state: {has_gru}, Sequence length: {batch_size}, Output heatmaps: {out_dim}, h0 shape: {h0_shape if has_gru else 'N/A'}"
     )
-    return session, has_gru, out_dim, h0_shape, batch_size, input_names, output_names
+    return compiled_model, has_gru, out_dim, h0_shape, batch_size, input_names, output_names
 
 
 def initialize_video(video_path):
@@ -127,7 +129,7 @@ def setup_output_writer(
         return None, None
     video_dir = os.path.join(output_dir, video_basename)
     os.makedirs(video_dir, exist_ok=True)
-    output_path = os.path.join(video_dir, "predict.mp4")
+    output_path = os.path.join(video_dir, "predict_ov.mp4")
     out_writer = cv2.VideoWriter(
         output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (frame_width, frame_height)
     )
@@ -336,22 +338,20 @@ def render_prediction(frame, points, visibility, x_orig, y_orig, radius, contour
     return vis_frame
 
 
-def run_inference(session, input_tensor, has_gru, h0, input_names, output_names):
-    """Helper для инференса с поддержкой GRU."""
-    inputs = {input_names[0]: input_tensor}  # Основной инпут (кадры)
+def run_inference(compiled_model, input_tensor, has_gru, h0, input_names):
+    inputs = {input_names[0]: input_tensor}
     if has_gru:
-        if len(input_names) < 2:
-            raise ValueError("GRU model expects at least 2 inputs: images and h0")
-        inputs[input_names[1]] = h0  # Добавляем h0
-    
-    outputs = session.run(output_names, inputs)
-    
-    heatmaps = outputs[0]  # Первый аутпут — heatmaps
+        inputs["h0"] = h0
+
+    results = compiled_model(inputs)
+
+    # Heatmaps are usually the first output
+    heatmaps = list(results.values())[0]
     new_h0 = None
     if has_gru:
-        if len(outputs) < 2:
-            raise ValueError("GRU model should output at least 2 values: heatmaps and hn")
-        new_h0 = outputs[1]  # Второе — новое скрытое состояние
+        # Assuming h0 is the second output
+        new_h0 = list(results.values())[1]
+
     return heatmaps, new_h0
 
 
@@ -371,8 +371,10 @@ def read_frames(cap, frame_queue, max_frames):
 def main():
     args = parse_args()
     input_width, input_height = 512, 288
-    
-    model_session, has_gru, out_dim, h0_shape, batch_size, input_names, output_names = load_onnx_model(args.model_path)
+
+    compiled_model, has_gru, out_dim, h0_shape, batch_size, input_names, output_names = load_ov_model(
+        args.model_path, args.device
+    )
 
     cap, frame_width, frame_height, fps, total_frames = initialize_video(
         args.video_path
@@ -387,7 +389,7 @@ def main():
     track_points = deque(maxlen=args.track_length)
     frame_index = 0
     frame_queue = queue.Queue(maxsize=2)
-    
+
     size_state = {
         "filtered_history": deque(maxlen=BALL_SIZE_HISTORY),
         "raw_history": deque(maxlen=BALL_RAW_SIZE_HISTORY),
@@ -395,10 +397,9 @@ def main():
     }
     prev_gray = None
 
-    # Инициализация скрытого состояния для GRU
+    # Initialize GRU state
     h0 = np.zeros(h0_shape, dtype=np.float32) if has_gru and h0_shape else None
 
-    # Start frame reading thread
     def frame_reader():
         while cap.isOpened():
             read_frames(cap, frame_queue, batch_size)
@@ -406,20 +407,17 @@ def main():
     reader_thread = threading.Thread(target=frame_reader, daemon=True)
     reader_thread.start()
 
-    pbar = tqdm(total=total_frames, desc="Processing video", unit="frame")
+    pbar = tqdm(total=total_frames, desc="Processing video (OpenVINO)", unit="frame")
     exit_flag = False
     while True:
         start_time = time.time()
 
-        # Get batch of frames
         frames = frame_queue.get()
         if frames is None:
             break
 
-        # Preprocess frames in batch
         processed_frames = preprocess_frames(frames, input_height, input_width)
 
-        # Fill buffer if not enough frames
         while len(frame_buffer) < batch_size:
             frame_buffer.append(
                 processed_frames[0]
@@ -427,26 +425,21 @@ def main():
                 else np.zeros((input_height, input_width), dtype=np.float32)
             )
 
-        # Update buffer with new frames
         for pf in processed_frames:
             frame_buffer.append(pf)
 
-        # Prepare input tensor
-        input_tensor = np.stack(frame_buffer, axis=2)  # (height, width, seq_len)
-        input_tensor = np.expand_dims(input_tensor, axis=0)  # (1, height, width, seq_len)
-        input_tensor = np.transpose(input_tensor, (0, 3, 1, 2))  # (1, seq_len, 288, 512)
+        input_tensor = np.stack(frame_buffer, axis=2)
+        input_tensor = np.expand_dims(input_tensor, axis=0)
+        input_tensor = np.transpose(input_tensor, (0, 3, 1, 2))
 
-        # Run inference with GRU support
-        output, new_h0 = run_inference(model_session, input_tensor, has_gru, h0, input_names, output_names)
+        output, new_h0 = run_inference(compiled_model, input_tensor, has_gru, h0, input_names)
         if has_gru and new_h0 is not None:
-            h0 = new_h0  # Обновляем состояние для следующего батча
+            h0 = new_h0
 
-        # Process predictions for all frames
         predictions = postprocess_output(
             output, input_height=input_height, input_width=input_width, out_dim=out_dim
         )
 
-        # Save results and visualize for each frame in the batch
         for i, (visibility, x, y) in enumerate(predictions[: len(frames)]):
             frame_gray = cv2.cvtColor(frames[i], cv2.COLOR_BGR2GRAY)
             x_orig = x * frame_width / input_width if visibility else -1
@@ -486,7 +479,7 @@ def main():
                     cv2.namedWindow("Ball Tracking", cv2.WINDOW_NORMAL)
                     cv2.imshow("Ball Tracking", vis_frame)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
-                        exit_flag = True  # Set flag to exit
+                        exit_flag = True
                         break
                 if out_writer is not None:
                     out_writer.write(vis_frame)
@@ -494,9 +487,6 @@ def main():
         if exit_flag:
             break
 
-        end_time = time.time()
-        batch_time = end_time - start_time
-        batch_fps = len(frames) / batch_time if batch_time > 0 else 0
         pbar.update(len(frames))
         frame_index += len(frames)
 
