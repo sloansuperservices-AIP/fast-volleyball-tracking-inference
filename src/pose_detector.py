@@ -291,6 +291,7 @@ def main():
     parser = argparse.ArgumentParser(description="Volleyball Pose Detection")
     parser.add_argument("--track_file", type=str, help="Path to track JSON file")
     parser.add_argument("--video_path", type=str, help="Path to video file")
+    parser.add_argument("--output_dir", type=str, default="output", help="Output directory")
     parser.add_argument("--visualize", action="store_true", help="Enable visualization")
     
     args = parser.parse_args()
@@ -301,7 +302,12 @@ def main():
     # Process a track file if provided
     if args.track_file and args.video_path:
         if os.path.exists(args.track_file):
-            add_pose_to_track_json(args.track_file, args.video_path, visualize=args.visualize)
+            add_pose_to_track_json(
+                args.track_file,
+                args.video_path,
+                output_dir=args.output_dir,
+                visualize=args.visualize
+            )
         else:
             print(f"Track file not found: {args.track_file}")
     else:
