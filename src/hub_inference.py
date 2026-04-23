@@ -4,6 +4,7 @@ import csv
 from ultralytics import YOLO
 import os
 import sys
+import argparse
 
 def run_hub_inference(video_path, model_url, api_key, output_dir, visualize=False, save_video=True):
     """
@@ -116,3 +117,24 @@ def run_hub_inference(video_path, model_url, api_key, output_dir, visualize=Fals
         cap.release()
 
     print(f"Processing complete.")
+
+def main():
+    parser = argparse.ArgumentParser(description="Ultralytics Hub Inference")
+    parser.add_argument("--video_path", type=str, required=True, help="Path to input video")
+    parser.add_argument("--model_url", type=str, default="https://hub.ultralytics.com/models/ITKRtcQHITZrgT2ZNpRq", help="Hub model URL")
+    parser.add_argument("--api_key", type=str, help="Hub API key")
+    parser.add_argument("--output_dir", type=str, default="output", help="Output directory")
+    parser.add_argument("--visualize", action="store_true", help="Visualize")
+
+    args = parser.parse_args()
+
+    run_hub_inference(
+        video_path=args.video_path,
+        model_url=args.model_url,
+        api_key=args.api_key,
+        output_dir=args.output_dir,
+        visualize=args.visualize
+    )
+
+if __name__ == "__main__":
+    main()
