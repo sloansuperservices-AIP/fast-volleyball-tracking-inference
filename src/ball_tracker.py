@@ -170,7 +170,6 @@ class BallTracker:
         distance_matrix = np.zeros((len(active_tracks), len(unused_detections)))
         for i, (track_id, track) in enumerate(active_tracks):
             if len(track.positions) > 0:
-                last_pos = track.positions[-1][0:2]
                 last_pos = track.prediction
                 for j, det in enumerate(unused_detections):
                     center_x, center_y, diameter = self.box_to_position(det)
@@ -275,7 +274,10 @@ class BallTracker:
                 max_score = total_score
                 main_ball = track_id
 
-        return main_ball, self.tracks, deleted_tracks
+        tracks_dict = {
+            track_id: track.to_dict() for track_id, track in self.tracks.items()
+        }
+        return main_ball, tracks_dict, deleted_tracks
 
     def to_json(self) -> str:
         data = {
