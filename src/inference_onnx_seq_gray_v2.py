@@ -127,16 +127,10 @@ def setup_csv_file(video_basename, output_dir):
     video_dir = os.path.join(output_dir, video_basename)
     os.makedirs(video_dir, exist_ok=True)
     csv_path = os.path.join(video_dir, "ball.csv")
-    pd.DataFrame(columns=["Frame", "Visibility", "X", "Y"]).to_csv(
+    pd.DataFrame(columns=["Frame", "Visibility", "X", "Y", "Radius"]).to_csv(
         csv_path, index=False
     )
     return csv_path
-
-
-def append_to_csv(result, csv_path):
-    if csv_path is None:
-        return
-    pd.DataFrame([result]).to_csv(csv_path, mode="a", header=False, index=False)
 
 
 def preprocess_frames(frames, input_height=288, input_width=512):
@@ -161,15 +155,16 @@ def postprocess_output(
         )
         if contours:
             largest_contour = max(contours, key=cv2.contourArea)
+            (x_circ, y_circ), radius = cv2.minEnclosingCircle(largest_contour)
             M = cv2.moments(largest_contour)
             if M["m00"] != 0:
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
-                results.append((1, cx, cy))
+                results.append((1, cx, cy, float(radius)))
             else:
-                results.append((0, 0, 0))
+                results.append((0, 0, 0, 0.0))
         else:
-            results.append((0, 0, 0))
+            results.append((0, 0, 0, 0.0))
     return results
 
 
@@ -235,6 +230,7 @@ def main():
     track_points = deque(maxlen=args.track_length)
     frame_index = 0
     frame_queue = queue.Queue(maxsize=2)
+    results_list = []
     
     # Инициализация скрытого состояния для GRU
     h0 = np.zeros(h0_shape, dtype=np.float32) if has_gru and h0_shape else None
@@ -288,9 +284,10 @@ def main():
         )
 
         # Save results and visualize for each frame in the batch
-        for i, (visibility, x, y) in enumerate(predictions[: len(frames)]):
+        for i, (visibility, x, y, radius) in enumerate(predictions[: len(frames)]):
             x_orig = x * frame_width / input_width if visibility else -1
             y_orig = y * frame_height / input_height if visibility else -1
+            radius_orig = radius * (frame_width / input_width) if visibility else 0.0
 
             if visibility:
                 track_points.append((int(x_orig), int(y_orig)))
@@ -303,8 +300,9 @@ def main():
                 "Visibility": visibility,
                 "X": int(x_orig),
                 "Y": int(y_orig),
+                "Radius": float(radius_orig),
             }
-            append_to_csv(result, csv_path)
+            results_list.append(result)
 
             if args.visualize or out_writer is not None:
                 vis_frame = frames[i].copy()
@@ -325,6 +323,9 @@ def main():
         batch_fps = len(frames) / batch_time if batch_time > 0 else 0
         pbar.update(len(frames))
         frame_index += len(frames)
+
+    if csv_path and results_list:
+        pd.DataFrame(results_list).to_csv(csv_path, mode="a", header=False, index=False)
 
     pbar.close()
     cap.release()
