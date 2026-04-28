@@ -6,19 +6,30 @@ Main entry point for the fast volleyball tracking inference system.
 import argparse
 import os
 import sys
+import subprocess
+
+def run_command(cmd, verbose=False):
+    if verbose:
+        print(f"Running command: {' '.join(cmd)}")
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        print(f"Command failed with return code {result.returncode}")
+        sys.exit(result.returncode)
 
 def main():
     parser = argparse.ArgumentParser(description="Fast Volleyball Tracking Inference")
-    parser.add_argument("--mode", type=str, choices=["track", "pose", "analyze", "hub-track"],
+    parser.add_argument("--mode", type=str,
+                        choices=["detect", "track", "combined", "reels", "all", "pose", "analyze", "hub-track"],
                         default="track", help="Processing mode")
     parser.add_argument("--video_path", type=str, help="Path to input video file")
     parser.add_argument("--track_file", type=str, help="Path to track JSON file (for pose mode)")
-    parser.add_argument("--model_path", type=str, default="models/vballNetV1.onnx", 
+    parser.add_argument("--model_path", type=str, default="models/VballNetFastV1_seq9_grayscale_233_h288_w512.onnx",
                         help="Path to ONNX model file")
     parser.add_argument("--output_dir", type=str, default="output", 
                         help="Directory to save output files")
     parser.add_argument("--visualize", action="store_true", 
                         help="Enable visualization on display using cv2")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     
     # Hub specific arguments
     parser.add_argument("--hub_model", type=str, default="https://hub.ultralytics.com/models/ITKRtcQHITZrgT2ZNpRq",
@@ -29,6 +40,66 @@ def main():
 
     args = parser.parse_args()
     
+    video_basename = os.path.splitext(os.path.basename(args.video_path))[0] if args.video_path else ""
+    video_out_dir = os.path.join(args.output_dir, video_basename) if video_basename else args.output_dir
+
+    if args.mode == "detect" or args.mode == "all":
+        if not args.video_path:
+            print("Error: --video_path is required for detection")
+            return 1
+
+        cmd = [sys.executable, "src/inference_onnx_seq_gray_v2.py",
+               "--video_path", args.video_path,
+               "--model_path", args.model_path,
+               "--output_dir", args.output_dir,
+               "--only_csv"]
+        if args.visualize:
+            cmd.append("--visualize")
+
+        print("--- Step 1: Ball Detection ---")
+        run_command(cmd, args.verbose)
+
+    if args.mode == "track" or args.mode == "all":
+        if not args.video_path:
+            print("Error: --video_path is required for tracking")
+            return 1
+
+        csv_path = os.path.join(video_out_dir, "ball.csv")
+        cmd = [sys.executable, "src/track_calculator.py",
+               "--csv_path", csv_path,
+               "--output_dir", args.output_dir]
+
+        print("--- Step 2: Track Calculation ---")
+        run_command(cmd, args.verbose)
+
+    if args.mode == "combined" or args.mode == "all":
+        if not args.video_path:
+            print("Error: --video_path is required for combined video generation")
+            return 1
+
+        cmd = [sys.executable, "src/track_processor.py",
+               "--video_path", args.video_path,
+               "--output_dir", args.output_dir]
+
+        print("--- Step 3: Combined Video Generation ---")
+        run_command(cmd, args.verbose)
+
+    if args.mode == "reels" or args.mode == "all":
+        if not args.video_path:
+            print("Error: --video_path is required for reels generation")
+            return 1
+
+        json_dir = os.path.join(video_out_dir, "tracks")
+        cmd = [sys.executable, "src/make_reels.py",
+               "--video_path", args.video_path,
+               "--json_dir", json_dir,
+               "--output_dir", args.output_dir]
+        if args.visualize:
+            cmd.append("--visualize")
+
+        print("--- Step 4: Vertical Reels Generation ---")
+        run_command(cmd, args.verbose)
+
     if args.mode == "hub-track":
         # Hub tracking mode
         if not args.video_path:
@@ -55,25 +126,6 @@ def main():
             print(f"Error during hub inference: {e}")
             return 1
 
-    elif args.mode == "track":
-        # Ball tracking mode
-        if not args.video_path:
-            print("Error: --video_path is required for tracking mode")
-            return 1
-            
-        # Import and run ball tracking
-        try:
-            from src.inference_onnx import main as track_main
-            # We would need to pass the args to the tracking module
-            print("Ball tracking mode selected")
-            print(f"Video: {args.video_path}")
-            print(f"Model: {args.model_path}")
-            print(f"Visualize: {args.visualize}")
-            # In a full implementation, we would call track_main with appropriate arguments
-        except ImportError as e:
-            print(f"Error importing tracking module: {e}")
-            return 1
-            
     elif args.mode == "pose":
         # Pose detection mode
         if not args.track_file or not args.video_path:
