@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-import pandas as pd
-import numpy as np
-import os
 import argparse
 import json
+import os
 from typing import List
+
+import numpy as np
+import pandas as pd
+
 from ball_tracker import BallTracker, Track
 from track_utils import find_cyclic_sequences, find_rolling_sequences
 
@@ -44,6 +46,11 @@ class TrackCalculator:
         df["Visibility"] = pd.to_numeric(df["Visibility"], errors="coerce")
         df["X"] = pd.to_numeric(df["X"], errors="coerce")
         df["Y"] = pd.to_numeric(df["Y"], errors="coerce")
+        if "Radius" not in df.columns:
+            df["Radius"] = 20.0
+        else:
+            df["Radius"] = pd.to_numeric(df["Radius"], errors="coerce").fillna(20.0)
+
         df.loc[(df["X"] == -1) | (df["Visibility"] == 0), ["X", "Y"]] = np.nan
         return df
 
@@ -87,12 +94,10 @@ class TrackCalculator:
 
     def _filter_short_tracks(self, episodes: List[Track]) -> List[Track]:
         """Filter, extend, merge, and clean up tracks."""
-        # 1. Filter by vertical range
-        # episodes = [ep for ep in episodes if ep.get_y_range() >= 1080 / 4.0]
         episodes = [self._trim_bounce_start(ep) for ep in episodes]
 
         # 2. Keep only tracks longer than minimum duration
-        long_tracks = episodes # DISABLED for debugging [ep for ep in episodes if ep.duration_sec() >= self.min_duration_sec]
+        long_tracks = episodes
         sorted_tracks = sorted(
             long_tracks, key=lambda x: x.duration_sec(), reverse=True
         )
@@ -172,12 +177,13 @@ class TrackCalculator:
             detections = []
             for _, row in frame_rows.iterrows():
                 if not np.isnan(row["X"]) and not np.isnan(row["Y"]):
+                    radius = row["Radius"]
                     detections.append(
                         {
-                            "x1": row["X"] - 20,
-                            "y1": row["Y"] - 20,
-                            "x2": row["X"] + 20,
-                            "y2": row["Y"] + 20,
+                            "x1": row["X"] - radius,
+                            "y1": row["Y"] - radius,
+                            "x2": row["X"] + radius,
+                            "y2": row["Y"] + radius,
                             "confidence": row["Visibility"],
                             "cls_id": 0,
                         }
@@ -207,7 +213,9 @@ class TrackCalculator:
     def _save_tracks_to_json(self) -> None:
         """Save each track to a separate JSON file."""
         csv_name = os.path.splitext(os.path.basename(self.csv_path))[0]
-        video_basename = os.path.basename(os.path.dirname(self.csv_path)) or csv_name.replace("_predict_ball", "")
+        video_basename = os.path.basename(os.path.dirname(self.csv_path)) or csv_name.replace(
+            "_predict_ball", ""
+        )
         tracks_dir = os.path.join(self.output_dir, video_basename, "tracks")
         os.makedirs(tracks_dir, exist_ok=True)
 
