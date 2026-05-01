@@ -150,11 +150,13 @@ class BallTracker:
 
 
     def box_to_position(self, box):
+        if "x" in box and "y" in box and "radius" in box:
+            return box["x"], box["y"], box["radius"]
         x1, y1, x2, y2 = box["x1"], box["y1"], box["x2"], box["y2"]
         center_x = (x1 + x2) / 2
         center_y = (y1 + y2) / 2
-        diameter = max(x2 - x1, y2 - y1)
-        return center_x, center_y, diameter
+        radius = max(x2 - x1, y2 - y1) / 2.0
+        return center_x, center_y, radius
 
     def update(self, detections, frame_number):
         deleted_tracks = []
@@ -170,10 +172,9 @@ class BallTracker:
         distance_matrix = np.zeros((len(active_tracks), len(unused_detections)))
         for i, (track_id, track) in enumerate(active_tracks):
             if len(track.positions) > 0:
-                last_pos = track.positions[-1][0:2]
                 last_pos = track.prediction
                 for j, det in enumerate(unused_detections):
-                    center_x, center_y, diameter = self.box_to_position(det)
+                    center_x, center_y, radius = self.box_to_position(det)
                     det_pos = [center_x, center_y]
                     distance_matrix[i, j] = distance.euclidean(
                         last_pos[0:2], det_pos[0:2]
@@ -214,14 +215,14 @@ class BallTracker:
     def _add_track(self, detection, frame_number, reason="Unknown"):
         track = Track()
         track.track_id = self.next_id
-        center_x, center_y, diameter = self.box_to_position(detection)
+        center_x, center_y, radius = self.box_to_position(detection)
         position = [center_x, center_y]
 
         track.positions = deque([(position, frame_number)], maxlen=self.buffer_size)
         track.prediction = position
         track.last_frame = frame_number
         track.start_frame = frame_number
-        track.ball_sizes = deque([diameter], maxlen=self.buffer_size)
+        track.ball_sizes = deque([radius], maxlen=self.buffer_size)
         track.reason = reason
         self.tracks[self.next_id] = track
         print(
@@ -230,12 +231,12 @@ class BallTracker:
         self.next_id += 1
 
     def _update_track(self, track_id, detection, frame_number):
-        center_x, center_y, diameter = self.box_to_position(detection)
+        center_x, center_y, radius = self.box_to_position(detection)
         position = [center_x, center_y]
 
         self.tracks[track_id].positions.append((position, frame_number))
         self.tracks[track_id].last_frame = frame_number
-        self.tracks[track_id].ball_sizes.append(diameter)
+        self.tracks[track_id].ball_sizes.append(radius)
 
         if len(self.tracks[track_id].positions) > 1:
             prev_pos, prev_frame = self.tracks[track_id].positions[-2]
