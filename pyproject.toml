@@ -17,6 +17,7 @@ dependencies = [
     "ultralytics>=8.0.0",
     "matplotlib>=3.7.0",
     "seaborn>=0.12.0",
+    "openvino>=2024.0.0",
 ]
 
 

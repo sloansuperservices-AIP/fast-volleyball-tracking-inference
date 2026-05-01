@@ -44,6 +44,11 @@ class TrackCalculator:
         df["Visibility"] = pd.to_numeric(df["Visibility"], errors="coerce")
         df["X"] = pd.to_numeric(df["X"], errors="coerce")
         df["Y"] = pd.to_numeric(df["Y"], errors="coerce")
+        if "Radius" in df.columns:
+            df["Radius"] = pd.to_numeric(df["Radius"], errors="coerce")
+        else:
+            df["Radius"] = 20.0  # Default radius if missing
+
         df.loc[(df["X"] == -1) | (df["Visibility"] == 0), ["X", "Y"]] = np.nan
         return df
 
@@ -174,10 +179,9 @@ class TrackCalculator:
                 if not np.isnan(row["X"]) and not np.isnan(row["Y"]):
                     detections.append(
                         {
-                            "x1": row["X"] - 20,
-                            "y1": row["Y"] - 20,
-                            "x2": row["X"] + 20,
-                            "y2": row["Y"] + 20,
+                            "x": row["X"],
+                            "y": row["Y"],
+                            "radius": row.get("Radius", 20.0),
                             "confidence": row["Visibility"],
                             "cls_id": 0,
                         }
