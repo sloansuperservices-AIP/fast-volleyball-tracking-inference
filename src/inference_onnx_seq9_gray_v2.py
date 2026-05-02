@@ -45,56 +45,18 @@ def parse_args():
     return parser.parse_args()
 
 
-
-def load_onnx_model(model_path):
+def load_model(model_path, input_height=288, input_width=512):
     if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model not found: {model_path}")
+        raise ValueError(f"Model file not found: {model_path}")
+    if not model_path.endswith(".onnx"):
+        raise ValueError(
+            f"Expected ONNX model file with .onnx extension, got: {model_path}"
+        )
     session = ort.InferenceSession(
         model_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
     )
-    input_names = [inp.name for inp in session.get_inputs()]
-    has_gru = "h0" in input_names
-    h0_shape = None
-    if has_gru:
-        for inp in session.get_inputs():
-            if inp.name == "h0":
-                h0_shape = inp.shape
-                break
-        if h0_shape is None:
-            raise ValueError("Could not determine h0 shape for GRU model.")
-        resolved_shape = []
-        for dim in h0_shape:
-            if isinstance(dim, str) or dim is None:
-                if dim in ["batch", "batch_size", None]:
-                    resolved_shape.append(1)
-                elif "hidden" in str(dim).lower():
-                    resolved_shape.append(512)
-                else:
-                    raise ValueError(
-                        f"Unknown symbolic dimension '{dim}' in h0_shape: {h0_shape}"
-                    )
-            else:
-                resolved_shape.append(dim)
-        h0_shape = tuple(resolved_shape)
-    
-    # Determine sequence length from model filename
-    if "seq15" in model_path.lower():
-        out_dim = 15
-        batch_size = 15
-    elif "seq9" in model_path.lower():
-        out_dim = 9
-        batch_size = 9
-    else:
-        out_dim = 3
-        batch_size = 3
-        
-    print(f"✅ Model loaded: {model_path}")
-    print(
-        f"   Has GRU state: {has_gru}, Sequence length: {batch_size}, Output heatmaps: {out_dim}, h0 shape: {h0_shape if has_gru else 'N/A'}"
-    )
-    return session, has_gru, out_dim, h0_shape, batch_size
-
-
+    out_dim = 9 if "seq9_grayscale" in model_path else 3
+    return session, out_dim
 
 
 def initialize_video(video_path):
@@ -113,9 +75,9 @@ def setup_output_writer(
 ):
     if output_dir is None or only_csv:
         return None, None
-    video_dir = os.path.join(output_dir, video_basename)
-    os.makedirs(video_dir, exist_ok=True)
-    output_path = os.path.join(video_dir, "predict.mp4")
+    output_path = os.path.join(output_dir, f"{video_basename}_predict.mp4")
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
     out_writer = cv2.VideoWriter(
         output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (frame_width, frame_height)
     )
@@ -125,9 +87,9 @@ def setup_output_writer(
 def setup_csv_file(video_basename, output_dir):
     if output_dir is None:
         return None
-    video_dir = os.path.join(output_dir, video_basename)
-    os.makedirs(video_dir, exist_ok=True)
-    csv_path = os.path.join(video_dir, "ball.csv")
+    csv_path = os.path.join(output_dir, f"{video_basename}_predict_ball.csv")
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
     pd.DataFrame(columns=["Frame", "Visibility", "X", "Y"]).to_csv(
         csv_path, index=False
     )
@@ -154,7 +116,7 @@ def postprocess_output(
     output, threshold=0.5, input_height=288, input_width=512, out_dim=9
 ):
     results = []
-    for frame_idx in range(out_dim):  # Process all heatmaps
+    for frame_idx in range(out_dim):  # Process all 9 heatmaps
         heatmap = output[0, frame_idx, :, :]
         _, binary = cv2.threshold(heatmap, threshold, 1.0, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(
@@ -185,7 +147,7 @@ def draw_track(
     return frame
 
 
-def read_frames(cap, frame_queue, max_frames):
+def read_frames(cap, frame_queue, max_frames=9):
     frames = []
     while len(frames) < max_frames:
         ret, frame = cap.read()
@@ -201,12 +163,9 @@ def read_frames(cap, frame_queue, max_frames):
 def main():
     args = parse_args()
     input_width, input_height = 512, 288
-    # batch_size is now determined dynamically from the model
+    batch_size = 9
 
-    #model_session, out_dim = load_model(args.model_path, input_height, input_width)
-    
-    model_session, has_gru, out_dim, h0_shape, batch_size = load_onnx_model(args.model_path)
-
+    model_session, out_dim = load_model(args.model_path, input_height, input_width)
     cap, frame_width, frame_height, fps, total_frames = initialize_video(
         args.video_path
     )
@@ -230,7 +189,7 @@ def main():
     reader_thread.start()
 
     pbar = tqdm(total=total_frames, desc="Processing video", unit="frame")
-    exit_flag = False
+
     while True:
         start_time = time.time()
 
@@ -255,15 +214,15 @@ def main():
             frame_buffer.append(pf)
 
         # Prepare input tensor
-        input_tensor = np.stack(frame_buffer, axis=2)  # (height, width, seq_len)
-        input_tensor = np.expand_dims(input_tensor, axis=0)  # (1, height, width, seq_len)
-        input_tensor = np.transpose(input_tensor, (0, 3, 1, 2))  # (1, seq_len, 288, 512)
+        input_tensor = np.stack(frame_buffer, axis=2)  # (height, width, 9)
+        input_tensor = np.expand_dims(input_tensor, axis=0)  # (1, height, width, 9)
+        input_tensor = np.transpose(input_tensor, (0, 3, 1, 2))  # (1, 9, 288, 512)
 
         # Run inference
         inputs = {model_session.get_inputs()[0].name: input_tensor}
         output = model_session.run(None, inputs)[0]
 
-        # Process predictions for all frames
+        # Process predictions for all 9 frames
         predictions = postprocess_output(
             output, input_height=input_height, input_width=input_width, out_dim=out_dim
         )
@@ -294,12 +253,9 @@ def main():
                     cv2.namedWindow("Ball Tracking", cv2.WINDOW_NORMAL)
                     cv2.imshow("Ball Tracking", vis_frame)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
-                        exit_flag = True  # Set flag to exit
                         break
                 if out_writer is not None:
                     out_writer.write(vis_frame)
-        if exit_flag:
-            break
 
         end_time = time.time()
         batch_time = end_time - start_time
