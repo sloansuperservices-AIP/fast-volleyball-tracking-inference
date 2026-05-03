@@ -13,7 +13,7 @@ class Track:
     prediction: List[float] = field(default_factory=list)
     last_frame: int = 0
     start_frame: int = 0
-    ball_sizes: deque = field(default_factory=lambda: deque(maxlen=3000))
+    ball_radii: deque = field(default_factory=lambda: deque(maxlen=3000))
     track_id: int = 0
     reason: str = "Unknown"
     fps: float = 30.0
@@ -83,7 +83,7 @@ class Track:
             "prediction": [convert_numpy(p) for p in self.prediction],
             "last_frame": convert_numpy(self.last_frame),
             "start_frame": convert_numpy(self.start_frame),
-            "ball_sizes": [convert_numpy(size) for size in self.ball_sizes],
+            "ball_radii": [convert_numpy(size) for size in self.ball_radii],
             "track_id": self.track_id,
             "reason": self.reason,
             "fps": self.fps,
@@ -123,7 +123,12 @@ class Track:
         track.prediction = data["prediction"]
         track.last_frame = data["last_frame"]
         track.start_frame = data["start_frame"]
-        track.ball_sizes = deque(data.get("ball_sizes", []), maxlen=buffer_size)
+        # Handle both legacy 'ball_sizes' (diameter) and new 'ball_radii'
+        if "ball_radii" in data:
+            track.ball_radii = deque(data["ball_radii"], maxlen=buffer_size)
+        else:
+            legacy_sizes = data.get("ball_sizes", [])
+            track.ball_radii = deque([s / 2.0 for s in legacy_sizes], maxlen=buffer_size)
         track.track_id = data.get("track_id", 0)
         track.max_height = data.get("max_height", 0.0)
         track.total_distance = data.get("total_distance", 0.0)
@@ -153,8 +158,12 @@ class BallTracker:
         x1, y1, x2, y2 = box["x1"], box["y1"], box["x2"], box["y2"]
         center_x = (x1 + x2) / 2
         center_y = (y1 + y2) / 2
-        diameter = max(x2 - x1, y2 - y1)
-        return center_x, center_y, diameter
+        # Use radius if provided in the box, otherwise infer from dimensions
+        if "radius" in box:
+            radius = box["radius"]
+        else:
+            radius = max(x2 - x1, y2 - y1) / 2.0
+        return center_x, center_y, radius
 
     def update(self, detections, frame_number):
         deleted_tracks = []
@@ -214,14 +223,14 @@ class BallTracker:
     def _add_track(self, detection, frame_number, reason="Unknown"):
         track = Track()
         track.track_id = self.next_id
-        center_x, center_y, diameter = self.box_to_position(detection)
+        center_x, center_y, radius = self.box_to_position(detection)
         position = [center_x, center_y]
 
         track.positions = deque([(position, frame_number)], maxlen=self.buffer_size)
         track.prediction = position
         track.last_frame = frame_number
         track.start_frame = frame_number
-        track.ball_sizes = deque([diameter], maxlen=self.buffer_size)
+        track.ball_radii = deque([radius], maxlen=self.buffer_size)
         track.reason = reason
         self.tracks[self.next_id] = track
         print(
@@ -230,12 +239,12 @@ class BallTracker:
         self.next_id += 1
 
     def _update_track(self, track_id, detection, frame_number):
-        center_x, center_y, diameter = self.box_to_position(detection)
+        center_x, center_y, radius = self.box_to_position(detection)
         position = [center_x, center_y]
 
         self.tracks[track_id].positions.append((position, frame_number))
         self.tracks[track_id].last_frame = frame_number
-        self.tracks[track_id].ball_sizes.append(diameter)
+        self.tracks[track_id].ball_radii.append(radius)
 
         if len(self.tracks[track_id].positions) > 1:
             prev_pos, prev_frame = self.tracks[track_id].positions[-2]
