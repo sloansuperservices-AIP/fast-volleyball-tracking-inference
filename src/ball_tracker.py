@@ -4,7 +4,6 @@ from scipy.spatial import distance
 from dataclasses import dataclass, field
 import json
 from typing import List, Tuple, Dict, Optional, Any
-import dataclasses
 
 
 @dataclass
@@ -23,6 +22,7 @@ class Track:
     total_distance: float = 0.0  # Pixels
     avg_speed: float = 0.0  # Pixels/frame
     max_speed: float = 0.0  # Pixels/frame
+
 
     def calculate_stats(self):
         """Calculates statistics based on positions."""
@@ -60,12 +60,11 @@ class Track:
         self.max_speed = float(max(speeds)) if speeds else 0.0
         self.avg_speed = float(np.mean(speeds)) if speeds else 0.0
 
-
     def to_dict(self) -> Dict[str, Any]:
-        """Преобразует объект Track в словарь, пригодный для сериализации в JSON."""
+        """Converts Track object to a dictionary suitable for JSON serialization."""
 
         def convert_numpy(obj):
-            """Конвертирует numpy-типы в стандартные Python-типы."""
+            """Converts numpy types to standard Python types."""
             if isinstance(obj, np.floating):
                 return float(obj)
             elif isinstance(obj, np.integer):
@@ -94,23 +93,23 @@ class Track:
         }
 
     def size(self) -> int:
-        # Возвращает разницу между last_frame и start_frame
+        # Returns the difference between last_frame and start_frame
         return self.last_frame - self.start_frame
 
     def duration_sec(self) -> float:
-        # Возвращает длительность трека в секундах
+        # Returns the track duration in seconds
         sz = self.size()
         return sz / self.fps if self.fps > 0 else 0.0
 
     def get_x_range(self) -> float:
-        """Возвращает разницу между максимальным и минимальным значением x из истории positions."""
+        """Returns the difference between maximum and minimum x values from positions history."""
         if not self.positions:
             return 0.0
         x_values = [pos[0][0] for pos in self.positions]
         return float(max(x_values) - min(x_values))
 
     def get_y_range(self) -> float:
-        """Возвращает разницу между максимальным и минимальным значением y из истории positions."""
+        """Returns the difference between maximum and minimum y values from positions history."""
         if not self.positions:
             return 0.0
         y_values = [pos[0][1] for pos in self.positions]
@@ -125,10 +124,6 @@ class Track:
         track.start_frame = data["start_frame"]
         track.ball_sizes = deque(data.get("ball_sizes", []), maxlen=buffer_size)
         track.track_id = data.get("track_id", 0)
-        track.max_height = data.get("max_height", 0.0)
-        track.total_distance = data.get("total_distance", 0.0)
-        track.avg_speed = data.get("avg_speed", 0.0)
-        track.max_speed = data.get("max_speed", 0.0)
         return track
 
 
@@ -147,7 +142,6 @@ class BallTracker:
         self.max_disappeared = max_disappeared
         self.max_distance = max_distance
         self.ball_diameter_cm = ball_diameter_cm
-
 
     def box_to_position(self, box):
         x1, y1, x2, y2 = box["x1"], box["y1"], box["x2"], box["y2"]
@@ -170,7 +164,6 @@ class BallTracker:
         distance_matrix = np.zeros((len(active_tracks), len(unused_detections)))
         for i, (track_id, track) in enumerate(active_tracks):
             if len(track.positions) > 0:
-                last_pos = track.positions[-1][0:2]
                 last_pos = track.prediction
                 for j, det in enumerate(unused_detections):
                     center_x, center_y, diameter = self.box_to_position(det)
@@ -224,9 +217,6 @@ class BallTracker:
         track.ball_sizes = deque([diameter], maxlen=self.buffer_size)
         track.reason = reason
         self.tracks[self.next_id] = track
-        print(
-            f"New track {self.next_id} created at frame {frame_number}, position ({center_x:.1f}, {center_y:.1f}), reason: {reason}"
-        )
         self.next_id += 1
 
     def _update_track(self, track_id, detection, frame_number):
@@ -275,7 +265,10 @@ class BallTracker:
                 max_score = total_score
                 main_ball = track_id
 
-        return main_ball, self.tracks, deleted_tracks
+        tracks_dict = {
+            track_id: track for track_id, track in self.tracks.items()
+        }
+        return main_ball, tracks_dict, deleted_tracks
 
     def to_json(self) -> str:
         data = {
