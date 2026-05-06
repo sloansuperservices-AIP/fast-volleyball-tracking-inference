@@ -8,3 +8,19 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Output and test data
+output/
+output_test/
+output_test_v2/
+output_test_tracks/
+output_all_test/
+test_output_hub/
+
+# Ignore generated media and data, but keep examples
+*.mp4
+*.csv
+*.json
+!examples/*.mp4
+!examples/*.csv
+!examples/*.gif
