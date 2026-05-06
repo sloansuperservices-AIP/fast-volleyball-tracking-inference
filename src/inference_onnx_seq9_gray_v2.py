@@ -128,7 +128,7 @@ def setup_csv_file(video_basename, output_dir):
     video_dir = os.path.join(output_dir, video_basename)
     os.makedirs(video_dir, exist_ok=True)
     csv_path = os.path.join(video_dir, "ball.csv")
-    pd.DataFrame(columns=["Frame", "Visibility", "X", "Y"]).to_csv(
+    pd.DataFrame(columns=["Frame", "Visibility", "X", "Y", "Radius"]).to_csv(
         csv_path, index=False
     )
     return csv_path
@@ -166,11 +166,12 @@ def postprocess_output(
             if M["m00"] != 0:
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
-                results.append((1, cx, cy))
+                (_, _), radius = cv2.minEnclosingCircle(largest_contour)
+                results.append((1, cx, cy, float(radius)))
             else:
-                results.append((0, 0, 0))
+                results.append((0, 0, 0, 0.0))
         else:
-            results.append((0, 0, 0))
+            results.append((0, 0, 0, 0.0))
     return results
 
 
@@ -269,9 +270,10 @@ def main():
         )
 
         # Save results and visualize for each frame in the batch
-        for i, (visibility, x, y) in enumerate(predictions[: len(frames)]):
+        for i, (visibility, x, y, radius) in enumerate(predictions[: len(frames)]):
             x_orig = x * frame_width / input_width if visibility else -1
             y_orig = y * frame_height / input_height if visibility else -1
+            radius_orig = radius * (frame_width / input_width) if visibility else 0
 
             if visibility:
                 track_points.append((int(x_orig), int(y_orig)))
@@ -284,6 +286,7 @@ def main():
                 "Visibility": visibility,
                 "X": int(x_orig),
                 "Y": int(y_orig),
+                "Radius": float(radius_orig),
             }
             append_to_csv(result, csv_path)
 
