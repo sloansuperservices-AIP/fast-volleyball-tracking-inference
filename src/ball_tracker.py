@@ -153,7 +153,10 @@ class BallTracker:
         x1, y1, x2, y2 = box["x1"], box["y1"], box["x2"], box["y2"]
         center_x = (x1 + x2) / 2
         center_y = (y1 + y2) / 2
-        diameter = max(x2 - x1, y2 - y1)
+        if "radius" in box:
+            diameter = box["radius"] * 2.0
+        else:
+            diameter = max(x2 - x1, y2 - y1)
         return center_x, center_y, diameter
 
     def update(self, detections, frame_number):
