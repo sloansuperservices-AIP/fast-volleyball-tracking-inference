@@ -63,15 +63,22 @@ def main():
             
         # Import and run ball tracking
         try:
-            from src.inference_onnx import main as track_main
-            # We would need to pass the args to the tracking module
+            from src.inference_onnx_seq_gray_v2 import main as track_main
+            # Forward arguments to the tracking module
+            sys.argv = [sys.argv[0], "--video_path", args.video_path, "--model_path", args.model_path, "--output_dir", args.output_dir]
+            if args.visualize:
+                sys.argv.append("--visualize")
+
             print("Ball tracking mode selected")
             print(f"Video: {args.video_path}")
             print(f"Model: {args.model_path}")
-            print(f"Visualize: {args.visualize}")
-            # In a full implementation, we would call track_main with appropriate arguments
+
+            track_main()
         except ImportError as e:
             print(f"Error importing tracking module: {e}")
+            return 1
+        except Exception as e:
+            print(f"Error during ball tracking: {e}")
             return 1
             
     elif args.mode == "pose":
@@ -86,7 +93,6 @@ def main():
             print("Pose detection mode selected")
             print(f"Track file: {args.track_file}")
             print(f"Video: {args.video_path}")
-            print(f"Visualize: {args.visualize}")
             
             add_pose_to_track_json(
                 track_file=args.track_file,
@@ -102,14 +108,33 @@ def main():
             return 1
             
     elif args.mode == "analyze":
-        # Analysis mode
-        print("Analysis mode selected")
-        print("This mode is not yet implemented")
+        # Analysis mode (Track calculation from CSV)
+        if not args.video_path:
+            print("Error: --video_path is required for analyze mode to resolve track metadata")
+            return 1
+
+        csv_path = os.path.join(args.output_dir, os.path.splitext(os.path.basename(args.video_path))[0], "ball.csv")
+        if not os.path.exists(csv_path):
+            print(f"Error: CSV file not found at {csv_path}. Run 'track' mode first.")
+            return 1
+
+        try:
+            from src.track_calculator import main as analyze_main
+            sys.argv = [sys.argv[0], "--csv_path", csv_path, "--output_dir", args.output_dir]
+            print("Track analysis mode selected")
+            print(f"CSV: {csv_path}")
+            analyze_main()
+        except ImportError as e:
+            print(f"Error importing analysis module: {e}")
+            return 1
+        except Exception as e:
+            print(f"Error during track analysis: {e}")
+            return 1
         
     else:
         print("Hello from fast-volleyball-tracking-inference!")
         print("Use --mode to specify the processing mode")
-        print("Available modes: track, pose, analyze")
+        print("Available modes: track, pose, analyze, hub-track")
         
     return 0
 
