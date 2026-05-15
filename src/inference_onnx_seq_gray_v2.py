@@ -9,6 +9,8 @@ import time
 from tqdm import tqdm
 import threading
 import queue
+import re
+from pathlib import Path
 
 
 def parse_args():
@@ -45,15 +47,36 @@ def parse_args():
     return parser.parse_args()
 
 
+def infer_model_params(model_path: str):
+    """Detect sequence length and GRU params from filename or session."""
+    model_name = Path(model_path).name.lower()
+
+    # Detect sequence length (seqX)
+    seq_match = re.search(r"seq(\d+)", model_name)
+    input_seq = int(seq_match.group(1)) if seq_match else 3
+
+    # Grid models usually have seq9/seq15 but we check specifically
+    is_grid = "grid" in model_name
+
+    return input_seq, is_grid
+
+
 def load_onnx_model(model_path):
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model not found: {model_path}")
+
     session = ort.InferenceSession(
         model_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
     )
+
     input_names = [inp.name for inp in session.get_inputs()]
     output_names = [out.name for out in session.get_outputs()]
     
+    # Determine sequence length
+    input_seq, is_grid = infer_model_params(model_path)
+    out_dim = input_seq
+    batch_size = input_seq
+
     has_gru = "h0" in input_names
     h0_shape = None
     if has_gru:
@@ -63,31 +86,19 @@ def load_onnx_model(model_path):
                 break
         if h0_shape is None:
             raise ValueError("Could not determine h0 shape for GRU model.")
+
         resolved_shape = []
         for dim in h0_shape:
             if isinstance(dim, str) or dim is None:
                 if dim in ["batch", "batch_size", None]:
                     resolved_shape.append(1)
                 elif "hidden" in str(dim).lower():
-                    resolved_shape.append(512)  # Адаптируй под твою модель, если hidden size другой
+                    resolved_shape.append(512)
                 else:
-                    raise ValueError(
-                        f"Unknown symbolic dimension '{dim}' in h0_shape: {h0_shape}"
-                    )
+                    resolved_shape.append(1) # Default fallback
             else:
                 resolved_shape.append(dim)
         h0_shape = tuple(resolved_shape)
-    
-    # Determine sequence length from model filename
-    if "seq15" in model_path.lower():
-        out_dim = 15
-        batch_size = 15
-    elif "seq9" in model_path.lower():
-        out_dim = 9
-        batch_size = 9
-    else:
-        out_dim = 3
-        batch_size = 3
         
     print(f"✅ Model loaded: {model_path}")
     print(
@@ -127,7 +138,7 @@ def setup_csv_file(video_basename, output_dir):
     video_dir = os.path.join(output_dir, video_basename)
     os.makedirs(video_dir, exist_ok=True)
     csv_path = os.path.join(video_dir, "ball.csv")
-    pd.DataFrame(columns=["Frame", "Visibility", "X", "Y"]).to_csv(
+    pd.DataFrame(columns=["Frame", "Visibility", "X", "Y", "Radius"]).to_csv(
         csv_path, index=False
     )
     return csv_path
@@ -136,7 +147,14 @@ def setup_csv_file(video_basename, output_dir):
 def append_to_csv(result, csv_path):
     if csv_path is None:
         return
-    pd.DataFrame([result]).to_csv(csv_path, mode="a", header=False, index=False)
+    # Use standard column order to match header
+    cols = ["Frame", "Visibility", "X", "Y", "Radius"]
+    df = pd.DataFrame([result])
+    # Ensure all columns exist
+    for c in cols:
+        if c not in df.columns:
+            df[c] = 0
+    df[cols].to_csv(csv_path, mode="a", header=False, index=False)
 
 
 def preprocess_frames(frames, input_height=288, input_width=512):
@@ -165,11 +183,13 @@ def postprocess_output(
             if M["m00"] != 0:
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
-                results.append((1, cx, cy))
+                # Calculate radius using minEnclosingCircle
+                (x_circle, y_circle), radius = cv2.minEnclosingCircle(largest_contour)
+                results.append((1, cx, cy, radius))
             else:
-                results.append((0, 0, 0))
+                results.append((0, 0, 0, 0))
         else:
-            results.append((0, 0, 0))
+            results.append((0, 0, 0, 0))
     return results
 
 
@@ -288,9 +308,10 @@ def main():
         )
 
         # Save results and visualize for each frame in the batch
-        for i, (visibility, x, y) in enumerate(predictions[: len(frames)]):
+        for i, (visibility, x, y, radius) in enumerate(predictions[: len(frames)]):
             x_orig = x * frame_width / input_width if visibility else -1
             y_orig = y * frame_height / input_height if visibility else -1
+            radius_orig = radius * frame_width / input_width if visibility else 0
 
             if visibility:
                 track_points.append((int(x_orig), int(y_orig)))
@@ -303,6 +324,7 @@ def main():
                 "Visibility": visibility,
                 "X": int(x_orig),
                 "Y": int(y_orig),
+                "Radius": float(radius_orig),
             }
             append_to_csv(result, csv_path)
 
