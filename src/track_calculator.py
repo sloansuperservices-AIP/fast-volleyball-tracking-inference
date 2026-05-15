@@ -44,6 +44,13 @@ class TrackCalculator:
         df["Visibility"] = pd.to_numeric(df["Visibility"], errors="coerce")
         df["X"] = pd.to_numeric(df["X"], errors="coerce")
         df["Y"] = pd.to_numeric(df["Y"], errors="coerce")
+
+        # Handle Radius if present, otherwise default to 20.0
+        if "Radius" in df.columns:
+            df["Radius"] = pd.to_numeric(df["Radius"], errors="coerce").fillna(20.0)
+        else:
+            df["Radius"] = 20.0
+
         df.loc[(df["X"] == -1) | (df["Visibility"] == 0), ["X", "Y"]] = np.nan
         return df
 
@@ -155,10 +162,38 @@ class TrackCalculator:
 
         # 6. Final trim after merging
         merged = [self._trim_bounce_start(ep) for ep in merged]
+
+        # 7. Interpolate missing frames
+        merged = self._interpolate_tracks(merged)
+
         return sorted(merged, key=lambda x: x.start_frame)
 
+    def _interpolate_tracks(self, tracks: List[Track]) -> List[Track]:
+        """Fill small gaps in tracks using linear interpolation."""
+        for track in tracks:
+            if len(track.positions) < 2:
+                continue
+
+            pos_list = sorted(list(track.positions), key=lambda x: x[1])
+            interpolated = []
+            for i in range(len(pos_list) - 1):
+                p1, f1 = pos_list[i]
+                p2, f2 = pos_list[i+1]
+                interpolated.append((p1, f1))
+
+                gap = f2 - f1
+                if 1 < gap <= 15:  # Interpolate gaps up to 15 frames
+                    for f in range(f1 + 1, f2):
+                        ratio = (f - f1) / gap
+                        ix = p1[0] + (p2[0] - p1[0]) * ratio
+                        iy = p1[1] + (p2[1] - p1[1]) * ratio
+                        interpolated.append(([ix, iy], f))
+            interpolated.append(pos_list[-1])
+            track.positions = deque(interpolated, maxlen=3000)
+        return tracks
+
     def _process_detections(self, df: pd.DataFrame) -> None:
-        """Run tracker and collect completed tracks."""
+        """Run tracker and collect completed tracks with O(N) optimization."""
         tracker = BallTracker(
             buffer_size=2500,
             max_disappeared=40,
@@ -167,22 +202,26 @@ class TrackCalculator:
         )
         close_tracks = []
 
-        for frame_num in sorted(df["Frame"].dropna().astype(int).unique()):
-            frame_rows = df[df["Frame"] == frame_num]
+        # Pre-filter detections to avoid NaNs
+        detect_df = df.dropna(subset=["X", "Y", "Frame"])
+
+        # O(N) iteration using groupby
+        for frame_num, frame_group in detect_df.groupby("Frame"):
             detections = []
-            for _, row in frame_rows.iterrows():
-                if not np.isnan(row["X"]) and not np.isnan(row["Y"]):
-                    detections.append(
-                        {
-                            "x1": row["X"] - 20,
-                            "y1": row["Y"] - 20,
-                            "x2": row["X"] + 20,
-                            "y2": row["Y"] + 20,
-                            "confidence": row["Visibility"],
-                            "cls_id": 0,
-                        }
-                    )
-            _, _, close_track = tracker.update(detections, frame_num)
+            for row in frame_group.itertuples(index=False):
+                # We use row.Radius which is guaranteed by _load_and_process_csv
+                r = getattr(row, "Radius", 20.0)
+                detections.append(
+                    {
+                        "x1": row.X - r,
+                        "y1": row.Y - r,
+                        "x2": row.X + r,
+                        "y2": row.Y + r,
+                        "confidence": row.Visibility,
+                        "cls_id": 0,
+                    }
+                )
+            _, _, close_track = tracker.update(detections, int(frame_num))
             close_tracks.extend(close_track)
 
         episodes = []
