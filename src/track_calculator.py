@@ -44,6 +44,11 @@ class TrackCalculator:
         df["Visibility"] = pd.to_numeric(df["Visibility"], errors="coerce")
         df["X"] = pd.to_numeric(df["X"], errors="coerce")
         df["Y"] = pd.to_numeric(df["Y"], errors="coerce")
+        if "Radius" in df.columns:
+            df["Radius"] = pd.to_numeric(df["Radius"], errors="coerce").fillna(20.0)
+        else:
+            df["Radius"] = 20.0
+
         df.loc[(df["X"] == -1) | (df["Visibility"] == 0), ["X", "Y"]] = np.nan
         return df
 
@@ -167,22 +172,25 @@ class TrackCalculator:
         )
         close_tracks = []
 
-        for frame_num in sorted(df["Frame"].dropna().astype(int).unique()):
-            frame_rows = df[df["Frame"] == frame_num]
+        # Optimization: use itertuples for faster iteration
+        for frame_num, group in df.groupby('Frame'):
             detections = []
-            for _, row in frame_rows.iterrows():
-                if not np.isnan(row["X"]) and not np.isnan(row["Y"]):
+            for row in group.itertuples(index=False):
+                if not np.isnan(row.X) and not np.isnan(row.Y):
+                    r = getattr(row, 'Radius', 20.0)
+                    if r <= 0: r = 20.0
                     detections.append(
                         {
-                            "x1": row["X"] - 20,
-                            "y1": row["Y"] - 20,
-                            "x2": row["X"] + 20,
-                            "y2": row["Y"] + 20,
-                            "confidence": row["Visibility"],
+                            "x1": row.X - r,
+                            "y1": row.Y - r,
+                            "x2": row.X + r,
+                            "y2": row.Y + r,
+                            "radius": r,
+                            "confidence": row.Visibility,
                             "cls_id": 0,
                         }
                     )
-            _, _, close_track = tracker.update(detections, frame_num)
+            _, _, close_track = tracker.update(detections, int(frame_num))
             close_tracks.extend(close_track)
 
         episodes = []
