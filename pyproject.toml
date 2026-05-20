@@ -7,8 +7,8 @@ requires-python = ">=3.12"
 dependencies = [
     "filterpy>=1.4.5",
     "onnxruntime>=1.22.0",
-    "opencv-contrib-python>=4.12.0.88",
-    "opencv-python>=4.12.0.88",
+    "openvino>=2026.1.0",
+    "opencv-python-headless>=4.10.0",
     "pandas>=2.3.1",
     "scipy>=1.16.0",
     "seaborn>=0.13.2",
@@ -16,11 +16,20 @@ dependencies = [
     "tqdm>=4.67.1",
     "ultralytics>=8.0.0",
     "matplotlib>=3.7.0",
-    "seaborn>=0.12.0",
 ]
 
 
 [project.optional-dependencies]
 gpu = [
-    "onnxruntime-gpu>=1.22.0",  # GPU-версия ONNX
+    "onnxruntime-gpu>=1.22.0",
+]
+dev = [
+    "opencv-contrib-python>=4.12.0.88",
+    "opencv-python>=4.12.0.88",
+    "pytest>=8.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
 ]
