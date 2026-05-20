@@ -6,6 +6,17 @@ Main entry point for the fast volleyball tracking inference system.
 import argparse
 import os
 import sys
+import subprocess
+
+def run_command(cmd):
+    """Run a shell command and return its return code."""
+    print(f"Running: {' '.join(cmd)}")
+    try:
+        result = subprocess.run(cmd, check=True)
+        return result.returncode
+    except subprocess.CalledProcessError as e:
+        print(f"Error running command: {e}")
+        return e.returncode
 
 def main():
     parser = argparse.ArgumentParser(description="Fast Volleyball Tracking Inference")
@@ -13,7 +24,7 @@ def main():
                         default="track", help="Processing mode")
     parser.add_argument("--video_path", type=str, help="Path to input video file")
     parser.add_argument("--track_file", type=str, help="Path to track JSON file (for pose mode)")
-    parser.add_argument("--model_path", type=str, default="models/vballNetV1.onnx", 
+    parser.add_argument("--model_path", type=str, default="models/VballNetV1_seq9_grayscale_330_h288_w512.onnx",
                         help="Path to ONNX model file")
     parser.add_argument("--output_dir", type=str, default="output", 
                         help="Directory to save output files")
@@ -61,18 +72,16 @@ def main():
             print("Error: --video_path is required for tracking mode")
             return 1
             
-        # Import and run ball tracking
-        try:
-            from src.inference_onnx import main as track_main
-            # We would need to pass the args to the tracking module
-            print("Ball tracking mode selected")
-            print(f"Video: {args.video_path}")
-            print(f"Model: {args.model_path}")
-            print(f"Visualize: {args.visualize}")
-            # In a full implementation, we would call track_main with appropriate arguments
-        except ImportError as e:
-            print(f"Error importing tracking module: {e}")
-            return 1
+        cmd = [
+            sys.executable, "src/inference_onnx_seq_gray_v2.py",
+            "--video_path", args.video_path,
+            "--model_path", args.model_path,
+            "--output_dir", args.output_dir
+        ]
+        if args.visualize:
+            cmd.append("--visualize")
+
+        return run_command(cmd)
             
     elif args.mode == "pose":
         # Pose detection mode
@@ -103,13 +112,29 @@ def main():
             
     elif args.mode == "analyze":
         # Analysis mode
-        print("Analysis mode selected")
-        print("This mode is not yet implemented")
+        if not args.video_path:
+            print("Error: --video_path is required for analyze mode")
+            return 1
+
+        video_basename = os.path.splitext(os.path.basename(args.video_path))[0]
+        csv_path = os.path.join(args.output_dir, video_basename, "ball.csv")
+
+        if not os.path.exists(csv_path):
+            print(f"Error: Detection CSV not found at {csv_path}. Run with --mode track first.")
+            return 1
+
+        print(f"Analyzing tracks from {csv_path}")
+        cmd = [
+            sys.executable, "src/track_calculator.py",
+            "--csv_path", csv_path,
+            "--output_dir", args.output_dir
+        ]
+        return run_command(cmd)
         
     else:
         print("Hello from fast-volleyball-tracking-inference!")
         print("Use --mode to specify the processing mode")
-        print("Available modes: track, pose, analyze")
+        print("Available modes: track, pose, analyze, hub-track")
         
     return 0
 
