@@ -60,7 +60,6 @@ class Track:
         self.max_speed = float(max(speeds)) if speeds else 0.0
         self.avg_speed = float(np.mean(speeds)) if speeds else 0.0
 
-
     def to_dict(self) -> Dict[str, Any]:
         """Преобразует объект Track в словарь, пригодный для сериализации в JSON."""
 
@@ -202,11 +201,13 @@ class BallTracker:
 
         for j, det in enumerate(unused_detections):
             if j not in used_detection_indices:
-                reason = (
-                    "No active tracks"
-                    if not active_tracks
-                    else f"Distance to nearest track > {self.max_distance} pixels; min_val = {min_val:.2f}"
-                )
+                if active_tracks:
+                    # Find min distance to this detection across all active tracks
+                    min_dist_to_det = np.min(distance_matrix[:, j])
+                    reason = f"Distance to nearest track ({min_dist_to_det:.2f}) > {self.max_distance} pixels"
+                else:
+                    reason = "No active tracks"
+
                 self._add_track(det, frame_number, reason)
 
         return self._get_main_ball(deleted_tracks)
@@ -275,7 +276,10 @@ class BallTracker:
                 max_score = total_score
                 main_ball = track_id
 
-        return main_ball, self.tracks, deleted_tracks
+        tracks_dict = {
+            track_id: track.to_dict() for track_id, track in self.tracks.items()
+        }
+        return main_ball, tracks_dict, deleted_tracks
 
     def to_json(self) -> str:
         data = {
