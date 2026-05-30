@@ -9,6 +9,31 @@ import time
 from tqdm import tqdm
 import threading
 import queue
+import re
+from pathlib import Path
+
+
+def is_headless():
+    """Checks if the environment is headless (no display)."""
+    return "DISPLAY" not in os.environ and "WAYLAND_DISPLAY" not in os.environ
+
+
+def infer_model_params(model_path):
+    """Infers model parameters from filename."""
+    model_name = Path(model_path).name.lower()
+
+    # Sequence length
+    if "seq15" in model_name:
+        input_seq = 15
+    elif "seq9" in model_name:
+        input_seq = 9
+    else:
+        input_seq = 3
+
+    # Model type (Grid vs Heatmap)
+    is_grid = "grid" in model_name
+
+    return input_seq, is_grid
 
 
 def parse_args():
@@ -69,7 +94,7 @@ def load_onnx_model(model_path):
                 if dim in ["batch", "batch_size", None]:
                     resolved_shape.append(1)
                 elif "hidden" in str(dim).lower():
-                    resolved_shape.append(512)  # Адаптируй под твою модель, если hidden size другой
+                    resolved_shape.append(512)
                 else:
                     raise ValueError(
                         f"Unknown symbolic dimension '{dim}' in h0_shape: {h0_shape}"
@@ -78,22 +103,14 @@ def load_onnx_model(model_path):
                 resolved_shape.append(dim)
         h0_shape = tuple(resolved_shape)
     
-    # Determine sequence length from model filename
-    if "seq15" in model_path.lower():
-        out_dim = 15
-        batch_size = 15
-    elif "seq9" in model_path.lower():
-        out_dim = 9
-        batch_size = 9
-    else:
-        out_dim = 3
-        batch_size = 3
+    batch_size, is_grid = infer_model_params(model_path)
+    out_dim = batch_size
         
     print(f"✅ Model loaded: {model_path}")
     print(
-        f"   Has GRU state: {has_gru}, Sequence length: {batch_size}, Output heatmaps: {out_dim}, h0 shape: {h0_shape if has_gru else 'N/A'}"
+        f"   Has GRU state: {has_gru}, Sequence length: {batch_size}, Output: {'Grid' if is_grid else 'Heatmap'}, h0 shape: {h0_shape if has_gru else 'N/A'}"
     )
-    return session, has_gru, out_dim, h0_shape, batch_size, input_names, output_names
+    return session, has_gru, out_dim, h0_shape, batch_size, input_names, output_names, is_grid
 
 
 def initialize_video(video_path):
@@ -127,7 +144,7 @@ def setup_csv_file(video_basename, output_dir):
     video_dir = os.path.join(output_dir, video_basename)
     os.makedirs(video_dir, exist_ok=True)
     csv_path = os.path.join(video_dir, "ball.csv")
-    pd.DataFrame(columns=["Frame", "Visibility", "X", "Y"]).to_csv(
+    pd.DataFrame(columns=["Frame", "Visibility", "X", "Y", "Radius"]).to_csv(
         csv_path, index=False
     )
     return csv_path
@@ -150,9 +167,29 @@ def preprocess_frames(frames, input_height=288, input_width=512):
 
 
 def postprocess_output(
-    output, threshold=0.5, input_height=288, input_width=512, out_dim=9
+    output, threshold=0.5, input_height=288, input_width=512, out_dim=9, is_grid=False
 ):
     results = []
+
+    if is_grid:
+        # Simple grid decoding (center of grid cell)
+        # Grid output is typically (1, seq, grid_h, grid_w)
+        for frame_idx in range(out_dim):
+            grid = output[0, frame_idx, :, :]
+            idx = np.argmax(grid)
+            max_val = grid.flatten()[idx]
+
+            if max_val > threshold:
+                gh, gw = grid.shape
+                y_grid, x_grid = np.unravel_index(idx, (gh, gw))
+                # Scale back to input resolution
+                cx = int((x_grid + 0.5) * (input_width / gw))
+                cy = int((y_grid + 0.5) * (input_height / gh))
+                results.append((1, cx, cy, 5.0)) # Grid doesn't easily give radius
+            else:
+                results.append((0, 0, 0, 0.0))
+        return results
+
     for frame_idx in range(out_dim):  # Process all heatmaps
         heatmap = output[0, frame_idx, :, :]
         _, binary = cv2.threshold(heatmap, threshold, 1.0, cv2.THRESH_BINARY)
@@ -165,11 +202,14 @@ def postprocess_output(
             if M["m00"] != 0:
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
-                results.append((1, cx, cy))
+
+                # Estimate radius
+                (x, y), radius = cv2.minEnclosingCircle(largest_contour)
+                results.append((1, cx, cy, float(radius)))
             else:
-                results.append((0, 0, 0))
+                results.append((0, 0, 0, 0.0))
         else:
-            results.append((0, 0, 0))
+            results.append((0, 0, 0, 0.0))
     return results
 
 
@@ -220,7 +260,12 @@ def main():
     args = parse_args()
     input_width, input_height = 512, 288
     
-    model_session, has_gru, out_dim, h0_shape, batch_size, input_names, output_names = load_onnx_model(args.model_path)
+    # Force disable visualization in headless mode
+    if args.visualize and is_headless():
+        print("⚠️ Headless environment detected. Disabling visualization.")
+        args.visualize = False
+
+    model_session, has_gru, out_dim, h0_shape, batch_size, input_names, output_names, is_grid = load_onnx_model(args.model_path)
 
     cap, frame_width, frame_height, fps, total_frames = initialize_video(
         args.video_path
@@ -284,13 +329,15 @@ def main():
 
         # Process predictions for all frames
         predictions = postprocess_output(
-            output, input_height=input_height, input_width=input_width, out_dim=out_dim
+            output, input_height=input_height, input_width=input_width, out_dim=out_dim, is_grid=is_grid
         )
 
         # Save results and visualize for each frame in the batch
-        for i, (visibility, x, y) in enumerate(predictions[: len(frames)]):
+        for i, (visibility, x, y, radius) in enumerate(predictions[: len(frames)]):
             x_orig = x * frame_width / input_width if visibility else -1
             y_orig = y * frame_height / input_height if visibility else -1
+            # Scale radius too
+            radius_orig = radius * (frame_width / input_width) if visibility else 0.0
 
             if visibility:
                 track_points.append((int(x_orig), int(y_orig)))
@@ -303,6 +350,7 @@ def main():
                 "Visibility": visibility,
                 "X": int(x_orig),
                 "Y": int(y_orig),
+                "Radius": round(radius_orig, 2),
             }
             append_to_csv(result, csv_path)
 

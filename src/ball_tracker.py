@@ -150,6 +150,11 @@ class BallTracker:
 
 
     def box_to_position(self, box):
+        if "radius" in box:
+            center_x = (box["x1"] + box["x2"]) / 2
+            center_y = (box["y1"] + box["y2"]) / 2
+            return center_x, center_y, box["radius"] * 2.0
+
         x1, y1, x2, y2 = box["x1"], box["y1"], box["x2"], box["y2"]
         center_x = (x1 + x2) / 2
         center_y = (y1 + y2) / 2

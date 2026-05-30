@@ -44,6 +44,10 @@ class TrackCalculator:
         df["Visibility"] = pd.to_numeric(df["Visibility"], errors="coerce")
         df["X"] = pd.to_numeric(df["X"], errors="coerce")
         df["Y"] = pd.to_numeric(df["Y"], errors="coerce")
+        if "Radius" in df.columns:
+            df["Radius"] = pd.to_numeric(df["Radius"], errors="coerce")
+        else:
+            df["Radius"] = 10.0 # Default radius
         df.loc[(df["X"] == -1) | (df["Visibility"] == 0), ["X", "Y"]] = np.nan
         return df
 
@@ -167,22 +171,31 @@ class TrackCalculator:
         )
         close_tracks = []
 
-        for frame_num in sorted(df["Frame"].dropna().astype(int).unique()):
-            frame_rows = df[df["Frame"] == frame_num]
+        # Ensure we iterate through all frames to maintain temporal continuity
+        all_frames = sorted(df["Frame"].dropna().unique().astype(int))
+        if not all_frames:
+            return
+
+        # Pre-filter detections for efficiency but keep frames with no detections
+        detection_map = df.dropna(subset=["X", "Y"]).groupby("Frame")
+
+        for frame_num in range(all_frames[0], all_frames[-1] + 1):
             detections = []
-            for _, row in frame_rows.iterrows():
-                if not np.isnan(row["X"]) and not np.isnan(row["Y"]):
+            if frame_num in detection_map.groups:
+                group = detection_map.get_group(frame_num)
+                for row in group.itertuples(index=False):
                     detections.append(
                         {
-                            "x1": row["X"] - 20,
-                            "y1": row["Y"] - 20,
-                            "x2": row["X"] + 20,
-                            "y2": row["Y"] + 20,
-                            "confidence": row["Visibility"],
+                            "x1": row.X - 20,
+                            "y1": row.Y - 20,
+                            "x2": row.X + 20,
+                            "y2": row.Y + 20,
+                            "radius": row.Radius if hasattr(row, "Radius") else 10.0,
+                            "confidence": row.Visibility,
                             "cls_id": 0,
                         }
                     )
-            _, _, close_track = tracker.update(detections, frame_num)
+            _, _, close_track = tracker.update(detections, int(frame_num))
             close_tracks.extend(close_track)
 
         episodes = []
