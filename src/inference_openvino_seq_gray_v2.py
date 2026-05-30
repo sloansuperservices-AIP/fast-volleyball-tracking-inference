@@ -2,13 +2,19 @@ import argparse
 import cv2
 import numpy as np
 import pandas as pd
-import onnxruntime as ort
-from collections import deque
 import os
 import time
 from tqdm import tqdm
+from collections import deque
 import threading
 import queue
+
+try:
+    from openvino.runtime import Core
+except ImportError:
+    Core = None
+
+
 def is_headless():
     return "DISPLAY" not in os.environ and "WAYLAND_DISPLAY" not in os.environ
 
@@ -34,10 +40,13 @@ def infer_model_params(model_path):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Volleyball ball detection and tracking with ONNX"
+        description="Volleyball ball detection and tracking with OpenVINO"
     )
     parser.add_argument(
         "--video_path", type=str, required=True, help="Path to input video file"
+    )
+    parser.add_argument(
+        "--model_xml", type=str, required=True, help="Path to OpenVINO .xml model file"
     )
     parser.add_argument(
         "--track_length", type=int, default=8, help="Length of the ball track"
@@ -49,7 +58,7 @@ def parse_args():
         help="Directory to save output video and CSV",
     )
     parser.add_argument(
-        "--model_path", type=str, required=True, help="Path to ONNX model file"
+        "--device", type=str, default="CPU", help="Device for OpenVINO (CPU, GPU, etc.)"
     )
     parser.add_argument(
         "--visualize",
@@ -66,56 +75,29 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_onnx_model(model_path):
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model not found: {model_path}")
-    session = ort.InferenceSession(
-        model_path, providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
-    )
-    input_names = [inp.name for inp in session.get_inputs()]
-    output_names = [out.name for out in session.get_outputs()]
+def load_openvino_model(model_xml, device="CPU"):
+    if Core is None:
+        raise ImportError("OpenVINO not installed. Use 'uv add openvino'.")
+    if not os.path.exists(model_xml):
+        raise FileNotFoundError(f"Model not found: {model_xml}")
 
-    has_gru = "h0" in input_names
-    h0_shape = None
-    if has_gru:
-        for inp in session.get_inputs():
-            if inp.name == "h0":
-                h0_shape = inp.shape
-                break
-        if h0_shape is None:
-            raise ValueError("Could not determine h0 shape for GRU model.")
-        resolved_shape = []
-        for dim in h0_shape:
-            if isinstance(dim, str) or dim is None:
-                if dim in ["batch", "batch_size", None]:
-                    resolved_shape.append(1)
-                elif "hidden" in str(dim).lower():
-                    resolved_shape.append(512)
-                else:
-                    raise ValueError(
-                        f"Unknown symbolic dimension '{dim}' in h0_shape: {h0_shape}"
-                    )
-            else:
-                resolved_shape.append(dim)
-        h0_shape = tuple(resolved_shape)
+    core = Core()
+    model = core.read_model(model_xml)
+    compiled_model = core.compile_model(model, device)
 
-    batch_size, is_grid = infer_model_params(model_path)
+    input_layer = compiled_model.input(0)
+    output_layer = compiled_model.output(0)
+
+    # Determine params
+    batch_size, is_grid = infer_model_params(model_xml)
     out_dim = batch_size
 
-    print(f"✅ Model loaded: {model_path}")
+    print(f"✅ OpenVINO Model loaded: {model_xml} on {device}")
     print(
-        f"   Has GRU state: {has_gru}, Sequence length: {batch_size}, Output heatmaps: {out_dim}, Grid: {is_grid}, h0 shape: {h0_shape if has_gru else 'N/A'}"
+        f"   Sequence length: {batch_size}, Output heatmaps: {out_dim}, Grid: {is_grid}"
     )
-    return (
-        session,
-        has_gru,
-        out_dim,
-        h0_shape,
-        batch_size,
-        input_names,
-        output_names,
-        is_grid,
-    )
+
+    return compiled_model, input_layer, output_layer, batch_size, out_dim, is_grid
 
 
 def initialize_video(video_path):
@@ -149,7 +131,6 @@ def setup_csv_file(video_basename, output_dir):
     video_dir = os.path.join(output_dir, video_basename)
     os.makedirs(video_dir, exist_ok=True)
     csv_path = os.path.join(video_dir, "ball.csv")
-    # Write header
     with open(csv_path, "w") as f:
         f.write("Frame,Visibility,X,Y,Radius\n")
     return csv_path
@@ -174,25 +155,21 @@ def postprocess_output(
     is_grid=False,
 ):
     results = []
+    # OpenVINO output can be (1, seq, h, w)
     for frame_idx in range(out_dim):
         heatmap = output[0, frame_idx, :, :]
 
         if is_grid:
-            # For grid models, find max value in the grid
             _, max_val, _, max_loc = cv2.minMaxLoc(heatmap)
             if max_val > threshold:
-                # Grid coordinates to pixel coordinates (center of the cell)
-                # output is e.g. 27x48 for 288x512 (scale 10.66?)
-                # Actually GridTrackNet says 48x27 for 768x432 (scale 16)
                 gh, gw = heatmap.shape
                 cx = int((max_loc[0] + 0.5) * (input_width / gw))
                 cy = int((max_loc[1] + 0.5) * (input_height / gh))
-                results.append((1, cx, cy, 5.0))  # Default radius for grid
+                results.append((1, cx, cy, 5.0))
             else:
                 results.append((0, 0, 0, 0.0))
             continue
 
-        # Heatmap processing
         _, binary = cv2.threshold(heatmap, threshold, 1.0, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(
             (binary * 255).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
@@ -223,25 +200,6 @@ def draw_track(
     return frame
 
 
-def run_inference(session, input_tensor, has_gru, h0, input_names, output_names):
-    """Helper для инференса с поддержкой GRU."""
-    inputs = {input_names[0]: input_tensor}  # Основной инпут (кадры)
-    if has_gru:
-        if len(input_names) < 2:
-            raise ValueError("GRU model expects at least 2 inputs: images and h0")
-        inputs[input_names[1]] = h0  # Добавляем h0
-    
-    outputs = session.run(output_names, inputs)
-    
-    heatmaps = outputs[0]  # Первый аутпут — heatmaps
-    new_h0 = None
-    if has_gru:
-        if len(outputs) < 2:
-            raise ValueError("GRU model should output at least 2 values: heatmaps and hn")
-        new_h0 = outputs[1]  # Второе — новое скрытое состояние
-    return heatmaps, new_h0
-
-
 def read_frames(cap, frame_queue, max_frames):
     frames = []
     while len(frames) < max_frames:
@@ -260,15 +218,13 @@ def main():
     input_width, input_height = 512, 288
 
     (
-        model_session,
-        has_gru,
-        out_dim,
-        h0_shape,
+        compiled_model,
+        input_layer,
+        output_layer,
         batch_size,
-        input_names,
-        output_names,
+        out_dim,
         is_grid,
-    ) = load_onnx_model(args.model_path)
+    ) = load_openvino_model(args.model_xml, args.device)
 
     cap, frame_width, frame_height, fps, total_frames = initialize_video(args.video_path)
     video_basename = os.path.splitext(os.path.basename(args.video_path))[0]
@@ -283,14 +239,9 @@ def main():
     frame_queue = queue.Queue(maxsize=2)
     all_results = []
 
-    # Headless check
     if is_headless():
         args.visualize = False
 
-    # GRU state initialization
-    h0 = np.zeros(h0_shape, dtype=np.float32) if has_gru and h0_shape else None
-
-    # Start frame reading thread
     def frame_reader():
         while cap.isOpened():
             read_frames(cap, frame_queue, batch_size)
@@ -298,21 +249,16 @@ def main():
     reader_thread = threading.Thread(target=frame_reader, daemon=True)
     reader_thread.start()
 
-    pbar = tqdm(total=total_frames, desc="Processing video", unit="frame")
+    pbar = tqdm(total=total_frames, desc="Processing video (OpenVINO)", unit="frame")
     exit_flag = False
     try:
         while True:
-            start_time = time.time()
-
-            # Get batch of frames
             frames = frame_queue.get()
             if frames is None:
                 break
 
-            # Preprocess frames in batch
             processed_frames = preprocess_frames(frames, input_height, input_width)
 
-            # Fill buffer if not enough frames
             while len(frame_buffer) < batch_size:
                 frame_buffer.append(
                     processed_frames[0]
@@ -320,34 +266,24 @@ def main():
                     else np.zeros((input_height, input_width), dtype=np.float32)
                 )
 
-            # Update buffer with new frames
             for pf in processed_frames:
                 frame_buffer.append(pf)
 
-            # Prepare input tensor
-            input_tensor = np.stack(frame_buffer, axis=2)  # (height, width, seq_len)
-            input_tensor = np.expand_dims(
-                input_tensor, axis=0
-            )  # (1, height, width, seq_len)
-            input_tensor = np.transpose(input_tensor, (0, 3, 1, 2))  # (1, seq_len, 288, 512)
+            input_tensor = np.stack(frame_buffer, axis=2)
+            input_tensor = np.expand_dims(input_tensor, axis=0)
+            input_tensor = np.transpose(input_tensor, (0, 3, 1, 2))
 
-            # Run inference with GRU support
-            output, new_h0 = run_inference(
-                model_session, input_tensor, has_gru, h0, input_names, output_names
-            )
-            if has_gru and new_h0 is not None:
-                h0 = new_h0  # Update state for next batch
+            # OpenVINO inference
+            results_ov = compiled_model([input_tensor])[output_layer]
 
-            # Process predictions for all frames
             predictions = postprocess_output(
-                output,
+                results_ov,
                 input_height=input_height,
                 input_width=input_width,
                 out_dim=out_dim,
                 is_grid=is_grid,
             )
 
-            # Save results and visualize for each frame in the batch
             for i, (visibility, x, y, radius) in enumerate(predictions[: len(frames)]):
                 x_orig = x * frame_width / input_width if visibility else -1
                 y_orig = y * frame_height / input_height if visibility else -1
@@ -386,7 +322,6 @@ def main():
             pbar.update(len(frames))
             frame_index += len(frames)
     finally:
-        # Save results to CSV at once
         if csv_path and all_results:
             df = pd.DataFrame(all_results)
             df.to_csv(csv_path, mode="a", index=False, header=False)
