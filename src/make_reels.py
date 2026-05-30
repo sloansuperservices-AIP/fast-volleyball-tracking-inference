@@ -3,7 +3,8 @@ import cv2
 import numpy as np
 import argparse
 import os
-from tqdm import tqdm  # <-- added import
+from tqdm import tqdm
+from scipy.signal import savgol_filter
 
 
 def ensure_reels_dir(path):
@@ -78,10 +79,16 @@ def crop_and_save_track(video_path, track, output_path, visualize=False):
             else:
                 x_centers.append(first_known_x)
 
-    # Сглаживание
+    # Сглаживание траектории с помощью фильтра Савицкого-Голея
     x_values = np.array(x_centers)
-    window = min(15, len(x_values))
-    if window > 1:
+    if len(x_values) > 11:
+        # window_length must be odd and less than or equal to the size of x_values
+        window_length = min(11, len(x_values))
+        if window_length % 2 == 0:
+            window_length -= 1
+        x_smooth = savgol_filter(x_values, window_length, 2)
+    elif len(x_values) > 1:
+        window = min(5, len(x_values))
         pad = window // 2
         x_padded = np.pad(x_values, (pad, pad), mode="edge")
         x_smooth = np.convolve(x_padded, np.ones(window) / window, mode="valid")
