@@ -63,7 +63,7 @@ def main():
             
         # Import and run ball tracking
         try:
-            from src.inference_onnx import main as track_main
+            from src.inference_onnx_seq_gray_v2 import main as track_main
             # We would need to pass the args to the tracking module
             print("Ball tracking mode selected")
             print(f"Video: {args.video_path}")
@@ -109,7 +109,7 @@ def main():
     else:
         print("Hello from fast-volleyball-tracking-inference!")
         print("Use --mode to specify the processing mode")
-        print("Available modes: track, pose, analyze")
+        print("Available modes: track, pose, analyze, hub-track")
         
     return 0
 
