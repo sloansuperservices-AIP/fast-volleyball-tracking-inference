@@ -60,7 +60,6 @@ class Track:
         self.max_speed = float(max(speeds)) if speeds else 0.0
         self.avg_speed = float(np.mean(speeds)) if speeds else 0.0
 
-
     def to_dict(self) -> Dict[str, Any]:
         """Преобразует объект Track в словарь, пригодный для сериализации в JSON."""
 
@@ -275,6 +274,9 @@ class BallTracker:
                 max_score = total_score
                 main_ball = track_id
 
+        tracks_dict = {
+            track_id: track.to_dict() for track_id, track in self.tracks.items()
+        }
         return main_ball, self.tracks, deleted_tracks
 
     def to_json(self) -> str:
