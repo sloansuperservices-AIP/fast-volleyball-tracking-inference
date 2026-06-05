@@ -109,7 +109,7 @@ def main():
     else:
         print("Hello from fast-volleyball-tracking-inference!")
         print("Use --mode to specify the processing mode")
-        print("Available modes: track, pose, analyze")
+        print("Available modes: track, pose, analyze, hub-track")
         
     return 0
 
