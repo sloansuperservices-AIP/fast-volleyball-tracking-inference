@@ -1,377 +1,95 @@
 #!/usr/bin/env python3
-"""
-Track Visualization & Export Tool
---------------------------------
-Loads ball tracking data from JSON files and visualizes or exports video clips
-with overlaid track positions. Supports:
-- Interactive preview
-- Single combined output video
-- Individual track videos
-Features:
-- Per-track progress bar with **live FPS**
-- Fade-out progress with FPS
-- Final **average processing speed**
-"""
-
-import os
 import cv2
 import json
+import os
 import argparse
-from typing import List, Optional
-from ball_tracker import Track
 from tqdm import tqdm
-import time  # <-- NEW: For timing
+from typing import List, Dict, Any
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Process ball tracks and create clips")
+    parser.add_argument("--video_path", type=str, required=True, help="Path to input video")
+    parser.add_argument("--output_dir", type=str, default="output", help="Root output directory")
+    parser.add_argument("--json_dir", type=str, help="Directory with track JSON files")
+    parser.add_argument("--split_dir", type=str, help="Directory to save individual rally clips")
+    return parser.parse_args()
 
-class TrackProcessor:
-    def __init__(
-        self,
-        json_dir: str,
-        video_path: str,
-        output_path: Optional[str] = None,
-        split_dir: Optional[str] = None,
-        fps: float = 30.0,
-    ):
-        self.json_dir = json_dir
-        self.video_path = video_path
-        self.output_path = output_path
-        self.split_dir = split_dir
-        self.fps = fps
-        self.tracks: List[Track] = []
-        self.total_processed_frames = 0
-        self.total_processing_time = 0.0  # For average FPS
+def process_video(video_path, tracks, output_path, args):
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return
 
-    def _load_tracks_from_json(self) -> None:
-        """Load all track JSON files from the specified directory."""
-        if not os.path.exists(self.json_dir):
-            raise FileNotFoundError(f"JSON directory not found: {self.json_dir}")
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        json_files = sorted(
-            [
-                f
-                for f in os.listdir(self.json_dir)
-                if f.startswith("track_") and f.endswith(".json")
-            ]
-        )
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
 
-        for filename in json_files:
-            file_path = os.path.join(self.json_dir, filename)
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            track = Track.from_dict(data)
-            self.tracks.append(track)
+    for track in tracks:
+        start = track.get("start_frame", 0)
+        end = track.get("last_frame", 0)
 
-        print(f"Loaded {len(self.tracks)} track(s) from {self.json_dir}")
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+        for _ in range(start, end + 1):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            out.write(frame)
 
-    def _validate_video(self) -> None:
-        """Check if the input video file exists."""
-        if not os.path.exists(self.video_path):
-            raise FileNotFoundError(f"Video file not found: {self.video_path}")
+    cap.release()
+    out.release()
 
-    def visualize_tracks(self) -> None:
-        """Main function to visualize tracks on video or export clips with FPS tracking."""
-        self._validate_video()
-        cap = cv2.VideoCapture(self.video_path)
-        if not cap.isOpened():
-            raise ValueError(f"Failed to open video file: {self.video_path}")
+def split_rallies(video_path, tracks, split_dir, args):
+    os.makedirs(split_dir, exist_ok=True)
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        video_fps = cap.get(cv2.CAP_PROP_FPS)
-        fps = video_fps if video_fps > 0 else self.fps
-        total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    video_basename = os.path.splitext(os.path.basename(video_path))[0]
 
-        # Video writers
-        combined_writer = None
-        if self.output_path and not self.split_dir:
-            fourcc = cv2.VideoWriter_fourcc(*"XVID")
-            combined_writer = cv2.VideoWriter(
-                self.output_path, fourcc, fps, (width, height)
-            )
+    for track in tracks:
+        track_id = track.get("track_id", 0)
+        start = track.get("start_frame", 0)
+        end = track.get("last_frame", 0)
 
-        if self.split_dir:
-            os.makedirs(self.split_dir, exist_ok=True)
+        out_path = os.path.join(split_dir, f"{video_basename}_rally_{track_id:04d}.mp4")
+        out = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
 
-        fade_duration = 0.5
-        fade_frames = int(fps * fade_duration)
-
-        processed_count = 0
-        total_tracks = len(self.tracks)
-
-        overall_start_time = time.time()
-
-        for idx, track in enumerate(self.tracks):
-            track_id = track.track_id
-            start_frame = track.start_frame
-            end_frame = track.last_frame
-            frame_count = end_frame - start_frame + 1
-
-            print(
-                f"\nProcessing track ID: {track_id} | Frames: {start_frame}–{end_frame} ({frame_count})"
-            )
-
-            track_writer = None
-            track_video_path = None
-            if self.split_dir:
-                track_video_path = os.path.join(
-                    self.split_dir, f"track_{track_id:04d}.mp4"
-                )
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                track_writer = cv2.VideoWriter(
-                    track_video_path, fourcc, fps, (width, height)
-                )
-                if not track_writer.isOpened():
-                    print(f"Failed to create video writer for: {track_video_path}")
-                    continue
-
-            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-            frame_num = start_frame
-            last_clean_frame = None
-
-            # --- Progress bar with live FPS ---
-            pbar = tqdm(
-                total=frame_count,
-                desc=f"Track {track_id}",
-                unit="frame",
-                leave=False,
-                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} | {rate_fmt} [{elapsed}<{remaining}]",
-            )
-
-            track_start_time = time.time()
-
-            while frame_num <= end_frame:
-                ret, frame = cap.read()
-                if not ret:
-                    print(
-                        f"\nWarning: Failed to read frame {frame_num}, stopping track {track_id}"
-                    )
-                    break
-
-                clean_frame = frame.copy()
-
-                # Draw tail (trajectory)
-                tail_length = 15  # Number of frames to show in the tail
-
-                # Get current and recent positions
-                current_positions = [
-                    pos for pos in track.positions
-                    if pos[1] <= frame_num and pos[1] > frame_num - tail_length
-                ]
-
-                for i, pos_data in enumerate(current_positions):
-                    pos, pf = pos_data[0], pos_data[1]
-                    px, py = int(pos[0]), int(pos[1])
-
-                    # Calculate opacity based on how old the position is
-                    # Newer positions are more opaque
-                    age = frame_num - pf
-                    alpha = max(0, 1 - (age / tail_length))
-
-                    color = (0, 255, 255)  # Yellow
-
-                    # Only draw the circle if it's visible enough
-                    if alpha > 0.1:
-                         # We can't directly draw with alpha in OpenCV without overlay
-                        overlay = frame.copy()
-                        cv2.circle(overlay, (px, py), 8, color, -1)
-                        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
-
-                    # Highlight the current position
-                    if pf == frame_num:
-                        cv2.circle(frame, (px, py), 10, (0, 0, 255), -1) # Red for current
-                        cv2.circle(frame, (px, py), 12, (255, 255, 255), 2) # White border
-
-                        elapsed_time = (frame_num - start_frame) / fps
-
-                        # Display Statistics
-                        stats_text_lines = [
-                            f"ID: {track_id}",
-                            f"Time: {elapsed_time:.2f}s",
-                            f"Speed: {track.avg_speed:.1f} px/f", # Ideally calculate instantaneous speed
-                            f"Max H: {track.max_height:.1f} px"
-                        ]
-
-                        y_offset = py - 40
-                        for line in stats_text_lines:
-                             cv2.putText(
-                                frame,
-                                line,
-                                (px + 20, y_offset),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.6,
-                                (255, 255, 255), # White text
-                                2,
-                                cv2.LINE_AA,
-                            )
-                             cv2.putText(
-                                frame,
-                                line,
-                                (px + 20, y_offset),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.6,
-                                (0, 0, 0), # Black outline
-                                1,
-                                cv2.LINE_AA,
-                            )
-                             y_offset += 20
-
-                # Interactive mode
-                if not self.output_path and not self.split_dir:
-                    debug_text = (
-                        f"Frame: {frame_num}/{total_video_frames}, Track: {track_id}"
-                    )
-                    cv2.putText(
-                        frame,
-                        debug_text,
-                        (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 0, 255),
-                        2,
-                    )
-                    cv2.imshow("Track Visualization", frame)
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        pbar.close()
-                        cap.release()
-                        if combined_writer:
-                            combined_writer.release()
-                        if track_writer:
-                            track_writer.release()
-                        cv2.destroyAllWindows()
-                        return
-
-                # Write clean frame
-                if combined_writer:
-                    combined_writer.write(clean_frame)
-                if track_writer:
-                    track_writer.write(clean_frame)
-
-                last_clean_frame = clean_frame.copy()
-                frame_num += 1
-                pbar.update(1)
-
-            pbar.close()
-
-            track_time = time.time() - track_start_time
-            track_fps = frame_count / track_time if track_time > 0 else 0
-            self.total_processed_frames += frame_count
-            self.total_processing_time += track_time
-
-            # --- Fade-out with FPS ---
-            if (
-                (combined_writer or track_writer)
-                and last_clean_frame is not None
-                and fade_frames > 0
-            ):
-                fade_pbar = tqdm(
-                    total=fade_frames,
-                    desc="Fade-out",
-                    unit="frame",
-                    leave=False,
-                    bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} | {rate_fmt}",
-                )
-                fade_start = time.time()
-                for i in range(fade_frames):
-                    alpha = 1.0 - (i / fade_frames)
-                    faded = cv2.convertScaleAbs(last_clean_frame, alpha=alpha)
-                    if combined_writer:
-                        combined_writer.write(faded)
-                    if track_writer:
-                        track_writer.write(faded)
-                    fade_pbar.update(1)
-                fade_pbar.close()
-                fade_time = time.time() - fade_start
-                self.total_processing_time += fade_time
-                self.total_processed_frames += fade_frames
-
-            if track_writer:
-                track_writer.release()
-                print(
-                    f"Saved track {track_id} video: {track_video_path} ({track_fps:.1f} FPS)"
-                )
-
-            processed_count += 1
-            print(
-                f"Completed track {track_id} — {processed_count}/{total_tracks} processed"
-            )
-
-        # --- Final Summary ---
-        total_time = time.time() - overall_start_time
-        avg_fps = self.total_processed_frames / total_time if total_time > 0 else 0
-
-        cap.release()
-        if combined_writer:
-            combined_writer.release()
-            print(f"Combined video saved: {self.output_path}")
-
-        cv2.destroyAllWindows()
-
-        print("\n" + "=" * 60)
-        print(f"PROCESSING COMPLETE")
-        print(f"   Total tracks processed : {total_tracks}")
-        print(f"   Total frames processed : {self.total_processed_frames}")
-        print(f"   Total time             : {total_time:.2f} sec")
-        print(f"   Average processing FPS : {avg_fps:.1f} FPS")
-        print("=" * 60)
-
-        if not self.output_path and not self.split_dir:
-            print("Visualization complete. Press any key to exit...")
-            cv2.waitKey(0)
-
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+        for _ in range(start, end + 1):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            out.write(frame)
+        out.release()
+    cap.release()
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Visualize or export ball tracking data with FPS monitoring"
-    )
-    parser.add_argument(
-        "--json_dir", type=str, default=None, help="Directory with track_*.json files"
-    )
-    parser.add_argument(
-        "--video_path", type=str, required=True, help="Path to source video"
-    )
-    parser.add_argument(
-        "--output_path", type=str, default=None, help="Combined output video (AVI)"
-    )
-    parser.add_argument(
-        "--split_dir",
-        type=str,
-        default=None,
-        help="Directory for individual track videos (MP4)",
-    )
-    parser.add_argument(
-        "--output_dir", type=str, default=None, help="Root output directory"
-    )
-    parser.add_argument(
-        "--fps", type=float, default=30.0, help="Output FPS if video has none"
-    )
-    args = parser.parse_args()
+    args = parse_args()
+    video_name = os.path.splitext(os.path.basename(args.video_path))[0]
+    json_dir = args.json_dir or os.path.join(args.output_dir, video_name, "tracks")
 
-    base_name = os.path.splitext(os.path.basename(args.video_path))[0]
+    tracks = []
+    if os.path.exists(json_dir):
+        for filename in sorted(os.listdir(json_dir)):
+            if filename.endswith(".json"):
+                with open(os.path.join(json_dir, filename), 'r') as f:
+                    tracks.append(json.load(f))
 
-    if args.json_dir is None and args.output_dir:
-        args.json_dir = os.path.join(args.output_dir, base_name, "tracks")
-    if args.output_path is None and args.output_dir and not args.split_dir:
-        args.output_path = os.path.join(args.output_dir, base_name, "combined.mp4")
-    # If split_dir is provided, use it as-is; otherwise keep combined mode when output_dir is set.
+    if not tracks:
+        print(f"No tracks found in {json_dir}")
+        return
 
-    mode = "Interactive visualization"
+    combined_path = os.path.join(args.output_dir, video_name, "combined.mp4")
+    process_video(args.video_path, tracks, combined_path, args)
+    print(f"Saved combined video to {combined_path}")
+
     if args.split_dir:
-        mode = f"Exporting individual clips → {args.split_dir}"
-    elif args.output_path:
-        mode = f"Exporting combined video → {args.output_path}"
-
-    print(f"Mode: {mode}")
-
-    processor = TrackProcessor(
-        json_dir=args.json_dir,
-        video_path=args.video_path,
-        output_path=args.output_path,
-        split_dir=args.split_dir,
-        fps=args.fps,
-    )
-    processor._load_tracks_from_json()
-    processor.visualize_tracks()
-
+        split_rallies(args.video_path, tracks, args.split_dir, args)
+        print(f"Saved individual clips to {args.split_dir}")
 
 if __name__ == "__main__":
     main()
