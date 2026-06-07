@@ -9,7 +9,7 @@ import sys
 
 def main():
     parser = argparse.ArgumentParser(description="Fast Volleyball Tracking Inference")
-    parser.add_argument("--mode", type=str, choices=["track", "pose", "analyze", "hub-track"],
+    parser.add_argument("--mode", type=str, choices=["track", "openvino-track", "pose", "analyze", "hub-track"],
                         default="track", help="Processing mode")
     parser.add_argument("--video_path", type=str, help="Path to input video file")
     parser.add_argument("--track_file", type=str, help="Path to track JSON file (for pose mode)")
@@ -56,22 +56,42 @@ def main():
             return 1
 
     elif args.mode == "track":
-        # Ball tracking mode
+        # Ball tracking mode (ONNX)
         if not args.video_path:
             print("Error: --video_path is required for tracking mode")
             return 1
             
-        # Import and run ball tracking
         try:
-            from src.inference_onnx import main as track_main
-            # We would need to pass the args to the tracking module
-            print("Ball tracking mode selected")
-            print(f"Video: {args.video_path}")
-            print(f"Model: {args.model_path}")
-            print(f"Visualize: {args.visualize}")
-            # In a full implementation, we would call track_main with appropriate arguments
-        except ImportError as e:
-            print(f"Error importing tracking module: {e}")
+            from src.inference_onnx_seq_gray_v2 import run_inference_pipeline
+            print(f"Running tracking (ONNX) for: {args.video_path}")
+            run_inference_pipeline(
+                video_path=args.video_path,
+                model_path=args.model_path,
+                output_dir=args.output_dir,
+                visualize=args.visualize
+            )
+        except Exception as e:
+            print(f"Error during tracking: {e}")
+            return 1
+
+    elif args.mode == "openvino-track":
+        # Ball tracking mode (OpenVINO)
+        if not args.video_path:
+            print("Error: --video_path is required for tracking mode")
+            return 1
+
+        try:
+            from src.inference_openvino_seq_gray_v2 import run_ov_inference_pipeline
+            model_xml = args.model_path.replace(".onnx", ".xml")
+            print(f"Running tracking (OpenVINO) for: {args.video_path}")
+            run_ov_inference_pipeline(
+                video_path=args.video_path,
+                model_xml=model_xml,
+                output_dir=args.output_dir,
+                visualize=args.visualize
+            )
+        except Exception as e:
+            print(f"Error during OpenVINO tracking: {e}")
             return 1
             
     elif args.mode == "pose":
@@ -103,8 +123,30 @@ def main():
             
     elif args.mode == "analyze":
         # Analysis mode
-        print("Analysis mode selected")
-        print("This mode is not yet implemented")
+        if not args.output_dir:
+             print("Error: --output_dir is required for analyze mode")
+             return 1
+
+        try:
+            from scripts.analyze_zone4_ball_trajectories import analyze_trajectories
+            # Assuming tracks are in output_dir/video_basename/tracks
+            video_basename = os.path.splitext(os.path.basename(args.video_path))[0] if args.video_path else None
+            if video_basename:
+                json_dir = os.path.join(args.output_dir, video_basename, "tracks")
+            else:
+                # If no video_path, we can't easily guess the folder unless we search output_dir
+                print("Error: --video_path is required to locate tracks for analysis")
+                return 1
+
+            if not os.path.exists(json_dir):
+                print(f"Error: Tracks directory not found: {json_dir}")
+                return 1
+
+            print(f"Running analysis on: {json_dir}")
+            analyze_trajectories(json_dir)
+        except Exception as e:
+            print(f"Error during analysis: {e}")
+            return 1
         
     else:
         print("Hello from fast-volleyball-tracking-inference!")
