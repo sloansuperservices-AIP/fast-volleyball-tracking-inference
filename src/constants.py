@@ -1,0 +1,8 @@
+# Core constants for the volleyball tracking system
+
+INPUT_WIDTH = 512
+INPUT_HEIGHT = 288
+DEFAULT_FPS = 30.0
+MAX_TRACK_DISTANCE = 200.0
+MIN_TRACK_DURATION_SEC = 1.0
+DEFAULT_BALL_RADIUS = 20.0
