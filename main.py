@@ -6,15 +6,37 @@ Main entry point for the fast volleyball tracking inference system.
 import argparse
 import os
 import sys
+import subprocess
+
+def run_command(command):
+    """Helper to run a shell command and handle errors."""
+    try:
+        # Use uv run if possible to ensure dependencies are available
+        cmd = ["uv", "run"] + command
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Error executing command: {e}")
+        return False
+    except FileNotFoundError:
+        # Fallback to direct execution if uv is not present
+        try:
+            subprocess.run(command, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Error executing command: {e}")
+            return False
+    return True
 
 def main():
     parser = argparse.ArgumentParser(description="Fast Volleyball Tracking Inference")
-    parser.add_argument("--mode", type=str, choices=["track", "pose", "analyze", "hub-track"],
+    parser.add_argument("--mode", type=str, choices=["track", "pose", "analyze", "hub-track", "openvino-track"],
                         default="track", help="Processing mode")
     parser.add_argument("--video_path", type=str, help="Path to input video file")
     parser.add_argument("--track_file", type=str, help="Path to track JSON file (for pose mode)")
     parser.add_argument("--model_path", type=str, default="models/vballNetV1.onnx", 
                         help="Path to ONNX model file")
+    parser.add_argument("--model_xml", type=str, help="Path to OpenVINO .xml model file")
+    parser.add_argument("--court_json_path", type=str, help="Path to court annotation JSON (for analyze mode)")
+    parser.add_argument("--csv_path", type=str, help="Path to ball detection CSV (for analyze mode)")
     parser.add_argument("--output_dir", type=str, default="output", 
                         help="Directory to save output files")
     parser.add_argument("--visualize", action="store_true", 
@@ -30,7 +52,6 @@ def main():
     args = parser.parse_args()
     
     if args.mode == "hub-track":
-        # Hub tracking mode
         if not args.video_path:
             print("Error: --video_path is required for hub-track mode")
             return 1
@@ -38,9 +59,6 @@ def main():
         try:
             from src.hub_inference import run_hub_inference
             print("Hub tracking mode selected")
-            print(f"Video: {args.video_path}")
-            print(f"Model: {args.hub_model}")
-
             run_hub_inference(
                 video_path=args.video_path,
                 model_url=args.hub_model,
@@ -56,38 +74,40 @@ def main():
             return 1
 
     elif args.mode == "track":
-        # Ball tracking mode
         if not args.video_path:
             print("Error: --video_path is required for tracking mode")
             return 1
             
-        # Import and run ball tracking
-        try:
-            from src.inference_onnx import main as track_main
-            # We would need to pass the args to the tracking module
-            print("Ball tracking mode selected")
-            print(f"Video: {args.video_path}")
-            print(f"Model: {args.model_path}")
-            print(f"Visualize: {args.visualize}")
-            # In a full implementation, we would call track_main with appropriate arguments
-        except ImportError as e:
-            print(f"Error importing tracking module: {e}")
+        print("Ball tracking mode selected (ONNX)")
+        cmd = [sys.executable, "src/inference_onnx_seq_gray_v2.py", "--video_path", args.video_path, "--model_path", args.model_path]
+        if args.visualize: cmd.append("--visualize")
+        if args.output_dir: cmd.extend(["--output_dir", args.output_dir])
+        run_command(cmd)
+
+    elif args.mode == "openvino-track":
+        if not args.video_path:
+            print("Error: --video_path is required for OpenVINO tracking mode")
             return 1
+
+        model_xml = args.model_xml or args.model_path
+        if not model_xml:
+             print("Error: --model_xml or --model_path is required for OpenVINO tracking mode")
+             return 1
+
+        print(f"OpenVINO tracking mode selected using model: {model_xml}")
+        cmd = [sys.executable, "src/inference_openvino_seq_gray_v2.py", "--video_path", args.video_path, "--model_xml", model_xml]
+        if args.output_dir: cmd.extend(["--output_dir", args.output_dir])
+        if args.visualize: cmd.append("--visualize")
+        run_command(cmd)
             
     elif args.mode == "pose":
-        # Pose detection mode
         if not args.track_file or not args.video_path:
             print("Error: --track_file and --video_path are required for pose mode")
             return 1
             
-        # Import and run pose detection
         try:
             from src.pose_detector import add_pose_to_track_json
             print("Pose detection mode selected")
-            print(f"Track file: {args.track_file}")
-            print(f"Video: {args.video_path}")
-            print(f"Visualize: {args.visualize}")
-            
             add_pose_to_track_json(
                 track_file=args.track_file,
                 video_path=args.video_path,
@@ -97,19 +117,26 @@ def main():
         except ImportError as e:
             print(f"Error importing pose detection module: {e}")
             return 1
-        except Exception as e:
-            print(f"Error during pose detection: {e}")
-            return 1
             
     elif args.mode == "analyze":
-        # Analysis mode
+        if not args.csv_path or not args.court_json_path:
+            print("Error: --csv_path and --court_json_path are required for analyze mode")
+            return 1
+
         print("Analysis mode selected")
-        print("This mode is not yet implemented")
+        script_path = os.path.join("scripts", "analyze_zone4_ball_trajectories.py")
+        if os.path.exists(script_path):
+            print(f"Running analysis script: {script_path}")
+            cmd = [sys.executable, script_path, "--csv-path", args.csv_path, "--court-json-path", args.court_json_path]
+            if args.output_dir: cmd.extend(["--output-dir", args.output_dir])
+            if args.video_path: cmd.extend(["--video-path", args.video_path])
+            if args.visualize: cmd.append("--visualize")
+            run_command(cmd)
+        else:
+            print("Error: Analysis script not found in scripts/ directory")
         
     else:
-        print("Hello from fast-volleyball-tracking-inference!")
-        print("Use --mode to specify the processing mode")
-        print("Available modes: track, pose, analyze")
+        print("Available modes: track, pose, analyze, hub-track, openvino-track")
         
     return 0
 
