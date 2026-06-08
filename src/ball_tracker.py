@@ -21,51 +21,38 @@ class Track:
     # Statistics
     max_height: float = 0.0  # Min Y value (pixels)
     total_distance: float = 0.0  # Pixels
-    avg_speed: float = 0.0  # Pixels/frame
-    max_speed: float = 0.0  # Pixels/frame
+    avg_speed: float = 0.0  # Pixels per frame
+    max_speed: float = 0.0  # Pixels per frame
 
     def calculate_stats(self):
-        """Calculates statistics based on positions."""
+        """Calculates track statistics based on accumulated positions."""
         if not self.positions:
-            self.max_height = 0.0
-            self.total_distance = 0.0
-            self.avg_speed = 0.0
-            self.max_speed = 0.0
             return
 
-        # Max Height (min Y)
         y_values = [pos[0][1] for pos in self.positions]
         self.max_height = float(min(y_values)) if y_values else 0.0
 
-        # Speed and Distance
-        total_dist = 0.0
+        distances = []
         speeds = []
+        for i in range(1, len(self.positions)):
+            p1, f1 = self.positions[i - 1]
+            p2, f2 = self.positions[i]
+            dist = np.linalg.norm(np.array(p2) - np.array(p1))
+            distances.append(dist)
 
-        pos_list = list(self.positions)
-        for i in range(1, len(pos_list)):
-            p1 = np.array(pos_list[i-1][0])
-            p2 = np.array(pos_list[i][0])
-            dist = np.linalg.norm(p2 - p1)
-            total_dist += dist
-
-            f1 = pos_list[i-1][1]
-            f2 = pos_list[i][1]
             dt = f2 - f1
             if dt > 0:
                 speeds.append(dist / dt)
-            else:
-                speeds.append(0.0)
 
-        self.total_distance = float(total_dist)
-        self.max_speed = float(max(speeds)) if speeds else 0.0
+        self.total_distance = float(np.sum(distances))
+        self.max_speed = float(np.max(speeds)) if speeds else 0.0
         self.avg_speed = float(np.mean(speeds)) if speeds else 0.0
 
-
     def to_dict(self) -> Dict[str, Any]:
-        """Преобразует объект Track в словарь, пригодный для сериализации в JSON."""
+        """Converts the Track object to a dictionary suitable for JSON serialization."""
 
         def convert_numpy(obj):
-            """Конвертирует numpy-типы в стандартные Python-типы."""
+            """Converts numpy types to standard Python types."""
             if isinstance(obj, np.floating):
                 return float(obj)
             elif isinstance(obj, np.integer):
@@ -94,23 +81,23 @@ class Track:
         }
 
     def size(self) -> int:
-        # Возвращает разницу между last_frame и start_frame
+        # Returns the difference between last_frame and start_frame
         return self.last_frame - self.start_frame
 
     def duration_sec(self) -> float:
-        # Возвращает длительность трека в секундах
+        # Returns track duration in seconds
         sz = self.size()
         return sz / self.fps if self.fps > 0 else 0.0
 
     def get_x_range(self) -> float:
-        """Возвращает разницу между максимальным и минимальным значением x из истории positions."""
+        """Returns the difference between max and min x values from positions history."""
         if not self.positions:
             return 0.0
         x_values = [pos[0][0] for pos in self.positions]
         return float(max(x_values) - min(x_values))
 
     def get_y_range(self) -> float:
-        """Возвращает разницу между максимальным и минимальным значением y из истории positions."""
+        """Returns the difference between max and min y values from positions history."""
         if not self.positions:
             return 0.0
         y_values = [pos[0][1] for pos in self.positions]
