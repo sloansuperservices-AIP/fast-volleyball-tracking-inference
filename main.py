@@ -5,26 +5,43 @@ Main entry point for the fast volleyball tracking inference system.
 
 import argparse
 import os
+import subprocess
 import sys
+
+def run_command(command):
+    """Helper to run shell commands and exit on failure."""
+    print(f"Running: {' '.join(command)}")
+    try:
+        result = subprocess.run(command, check=True)
+        return result.returncode
+    except subprocess.CalledProcessError as e:
+        print(f"Error executing command: {e}")
+        sys.exit(e.returncode)
 
 def main():
     parser = argparse.ArgumentParser(description="Fast Volleyball Tracking Inference")
-    parser.add_argument("--mode", type=str, choices=["track", "pose", "analyze", "hub-track"],
+    parser.add_argument("--mode", type=str, choices=["track", "pose", "analyze", "hub-track", "openvino-track"],
                         default="track", help="Processing mode")
     parser.add_argument("--video_path", type=str, help="Path to input video file")
     parser.add_argument("--track_file", type=str, help="Path to track JSON file (for pose mode)")
     parser.add_argument("--model_path", type=str, default="models/vballNetV1.onnx", 
                         help="Path to ONNX model file")
+    parser.add_argument("--model_xml", type=str, help="Path to OpenVINO .xml model file")
     parser.add_argument("--output_dir", type=str, default="output", 
                         help="Directory to save output files")
     parser.add_argument("--visualize", action="store_true", 
                         help="Enable visualization on display using cv2")
+    parser.add_argument("--only_csv", action="store_true", help="Save only CSV, skip video output")
     
+    # Analysis specific arguments
+    parser.add_argument("--csv_path", type=str, help="Path to ball detections CSV")
+    parser.add_argument("--court_json_path", type=str, help="Path to court annotation JSON")
+
     # Hub specific arguments
     parser.add_argument("--hub_model", type=str, default="https://hub.ultralytics.com/models/ITKRtcQHITZrgT2ZNpRq",
                         help="Ultralytics Hub model URL or ID")
     parser.add_argument("--api_key", type=str,
-                        default=os.getenv("ULTRALYTICS_HUB_API_KEY", "5ea02b4238fc9528408b8c36dcdb3834e11a9cbf58"),
+                        default=os.getenv("ULTRALYTICS_HUB_API_KEY", ""),
                         help="Ultralytics Hub API key")
 
     args = parser.parse_args()
@@ -33,6 +50,9 @@ def main():
         # Hub tracking mode
         if not args.video_path:
             print("Error: --video_path is required for hub-track mode")
+            return 1
+        if not args.api_key:
+            print("Error: ULTRALYTICS_HUB_API_KEY is required for hub-track mode")
             return 1
 
         try:
@@ -56,23 +76,44 @@ def main():
             return 1
 
     elif args.mode == "track":
-        # Ball tracking mode
+        # Ball tracking mode (ONNX)
         if not args.video_path:
             print("Error: --video_path is required for tracking mode")
             return 1
+
+        cmd = [
+            sys.executable, "src/inference_onnx_seq_gray_v2.py",
+            "--video_path", args.video_path,
+            "--model_path", args.model_path,
+            "--output_dir", args.output_dir
+        ]
+        if args.visualize:
+            cmd.append("--visualize")
+        if args.only_csv:
+            cmd.append("--only_csv")
             
-        # Import and run ball tracking
-        try:
-            from src.inference_onnx import main as track_main
-            # We would need to pass the args to the tracking module
-            print("Ball tracking mode selected")
-            print(f"Video: {args.video_path}")
-            print(f"Model: {args.model_path}")
-            print(f"Visualize: {args.visualize}")
-            # In a full implementation, we would call track_main with appropriate arguments
-        except ImportError as e:
-            print(f"Error importing tracking module: {e}")
+        print("Ball tracking mode (ONNX) selected")
+        return run_command(cmd)
+
+    elif args.mode == "openvino-track":
+        # Ball tracking mode (OpenVINO)
+        if not args.video_path or not args.model_xml:
+            print("Error: --video_path and --model_xml are required for openvino-track mode")
             return 1
+
+        cmd = [
+            sys.executable, "src/inference_openvino_seq_gray_v2.py",
+            "--video_path", args.video_path,
+            "--model_xml", args.model_xml,
+            "--output_dir", args.output_dir
+        ]
+        if args.visualize:
+            cmd.append("--visualize")
+        if args.only_csv:
+            cmd.append("--only_csv")
+
+        print("Ball tracking mode (OpenVINO) selected")
+        return run_command(cmd)
             
     elif args.mode == "pose":
         # Pose detection mode
@@ -103,13 +144,28 @@ def main():
             
     elif args.mode == "analyze":
         # Analysis mode
+        if not args.csv_path or not args.court_json_path:
+            print("Error: --csv_path and --court_json_path are required for analyze mode")
+            return 1
+
+        cmd = [
+            sys.executable, "scripts/analyze_zone4_ball_trajectories.py",
+            "--csv-path", args.csv_path,
+            "--court-json-path", args.court_json_path,
+            "--output-dir", args.output_dir
+        ]
+        if args.visualize:
+            cmd.append("--visualize")
+        if args.video_path:
+            cmd.extend(["--video-path", args.video_path])
+
         print("Analysis mode selected")
-        print("This mode is not yet implemented")
+        return run_command(cmd)
         
     else:
         print("Hello from fast-volleyball-tracking-inference!")
         print("Use --mode to specify the processing mode")
-        print("Available modes: track, pose, analyze")
+        print("Available modes: track, openvino-track, pose, analyze, hub-track")
         
     return 0
 
