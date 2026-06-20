@@ -3,8 +3,12 @@ from collections import deque
 from scipy.spatial import distance
 from dataclasses import dataclass, field
 import json
+import logging
 from typing import List, Tuple, Dict, Optional, Any
 import dataclasses
+
+
+LOG = logging.getLogger(__name__)
 
 
 @dataclass
@@ -18,54 +22,11 @@ class Track:
     reason: str = "Unknown"
     fps: float = 30.0
 
-    # Statistics
-    max_height: float = 0.0  # Min Y value (pixels)
-    total_distance: float = 0.0  # Pixels
-    avg_speed: float = 0.0  # Pixels/frame
-    max_speed: float = 0.0  # Pixels/frame
-
-    def calculate_stats(self):
-        """Calculates statistics based on positions."""
-        if not self.positions:
-            self.max_height = 0.0
-            self.total_distance = 0.0
-            self.avg_speed = 0.0
-            self.max_speed = 0.0
-            return
-
-        # Max Height (min Y)
-        y_values = [pos[0][1] for pos in self.positions]
-        self.max_height = float(min(y_values)) if y_values else 0.0
-
-        # Speed and Distance
-        total_dist = 0.0
-        speeds = []
-
-        pos_list = list(self.positions)
-        for i in range(1, len(pos_list)):
-            p1 = np.array(pos_list[i-1][0])
-            p2 = np.array(pos_list[i][0])
-            dist = np.linalg.norm(p2 - p1)
-            total_dist += dist
-
-            f1 = pos_list[i-1][1]
-            f2 = pos_list[i][1]
-            dt = f2 - f1
-            if dt > 0:
-                speeds.append(dist / dt)
-            else:
-                speeds.append(0.0)
-
-        self.total_distance = float(total_dist)
-        self.max_speed = float(max(speeds)) if speeds else 0.0
-        self.avg_speed = float(np.mean(speeds)) if speeds else 0.0
-
-
     def to_dict(self) -> Dict[str, Any]:
-        """Преобразует объект Track в словарь, пригодный для сериализации в JSON."""
+        """Converts a Track object to a dictionary suitable for JSON serialization."""
 
         def convert_numpy(obj):
-            """Конвертирует numpy-типы в стандартные Python-типы."""
+            """Converts numpy types to standard Python types."""
             if isinstance(obj, np.floating):
                 return float(obj)
             elif isinstance(obj, np.integer):
@@ -87,30 +48,26 @@ class Track:
             "track_id": self.track_id,
             "reason": self.reason,
             "fps": self.fps,
-            "max_height": convert_numpy(self.max_height),
-            "total_distance": convert_numpy(self.total_distance),
-            "avg_speed": convert_numpy(self.avg_speed),
-            "max_speed": convert_numpy(self.max_speed),
         }
 
     def size(self) -> int:
-        # Возвращает разницу между last_frame и start_frame
+        # Returns the difference between last_frame and start_frame
         return self.last_frame - self.start_frame
 
     def duration_sec(self) -> float:
-        # Возвращает длительность трека в секундах
+        # Returns the track duration in seconds
         sz = self.size()
         return sz / self.fps if self.fps > 0 else 0.0
 
     def get_x_range(self) -> float:
-        """Возвращает разницу между максимальным и минимальным значением x из истории positions."""
+        """Returns the difference between the maximum and minimum x value from positions history."""
         if not self.positions:
             return 0.0
         x_values = [pos[0][0] for pos in self.positions]
         return float(max(x_values) - min(x_values))
 
     def get_y_range(self) -> float:
-        """Возвращает разницу между максимальным и минимальным значением y из истории positions."""
+        """Returns the difference between the maximum and minimum y value from positions history."""
         if not self.positions:
             return 0.0
         y_values = [pos[0][1] for pos in self.positions]
@@ -125,10 +82,6 @@ class Track:
         track.start_frame = data["start_frame"]
         track.ball_sizes = deque(data.get("ball_sizes", []), maxlen=buffer_size)
         track.track_id = data.get("track_id", 0)
-        track.max_height = data.get("max_height", 0.0)
-        track.total_distance = data.get("total_distance", 0.0)
-        track.avg_speed = data.get("avg_speed", 0.0)
-        track.max_speed = data.get("max_speed", 0.0)
         return track
 
 
@@ -224,8 +177,13 @@ class BallTracker:
         track.ball_sizes = deque([diameter], maxlen=self.buffer_size)
         track.reason = reason
         self.tracks[self.next_id] = track
-        print(
-            f"New track {self.next_id} created at frame {frame_number}, position ({center_x:.1f}, {center_y:.1f}), reason: {reason}"
+        LOG.debug(
+            "New track %s created at frame %s, position (%.1f, %.1f), reason: %s",
+            self.next_id,
+            frame_number,
+            center_x,
+            center_y,
+            reason,
         )
         self.next_id += 1
 
@@ -275,7 +233,10 @@ class BallTracker:
                 max_score = total_score
                 main_ball = track_id
 
-        return main_ball, self.tracks, deleted_tracks
+        tracks_dict = {
+            track_id: track.to_dict() for track_id, track in self.tracks.items()
+        }
+        return main_ball, tracks_dict, deleted_tracks
 
     def to_json(self) -> str:
         data = {
