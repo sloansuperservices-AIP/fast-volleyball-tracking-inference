@@ -9,12 +9,14 @@ import sys
 
 def main():
     parser = argparse.ArgumentParser(description="Fast Volleyball Tracking Inference")
-    parser.add_argument("--mode", type=str, choices=["track", "pose", "analyze", "hub-track"],
+    parser.add_argument("--mode", type=str, choices=["track", "pose", "analyze", "hub-track", "openvino-track"],
                         default="track", help="Processing mode")
     parser.add_argument("--video_path", type=str, help="Path to input video file")
     parser.add_argument("--track_file", type=str, help="Path to track JSON file (for pose mode)")
     parser.add_argument("--model_path", type=str, default="models/vballNetV1.onnx", 
                         help="Path to ONNX model file")
+    parser.add_argument("--model_xml", type=str, help="Path to OpenVINO .xml model file")
+    parser.add_argument("--device", type=str, default="CPU", help="Device for OpenVINO inference (CPU, GPU, etc.)")
     parser.add_argument("--output_dir", type=str, default="output", 
                         help="Directory to save output files")
     parser.add_argument("--visualize", action="store_true", 
@@ -24,8 +26,12 @@ def main():
     parser.add_argument("--hub_model", type=str, default="https://hub.ultralytics.com/models/ITKRtcQHITZrgT2ZNpRq",
                         help="Ultralytics Hub model URL or ID")
     parser.add_argument("--api_key", type=str,
-                        default=os.getenv("ULTRALYTICS_HUB_API_KEY", "5ea02b4238fc9528408b8c36dcdb3834e11a9cbf58"),
+                        default=os.getenv("ULTRALYTICS_HUB_API_KEY"),
                         help="Ultralytics Hub API key")
+
+    # Analyze specific arguments
+    parser.add_argument("--csv_path", type=str, help="Path to CSV for analysis")
+    parser.add_argument("--court_json_path", type=str, help="Path to court JSON for analysis")
 
     args = parser.parse_args()
     
@@ -63,15 +69,48 @@ def main():
             
         # Import and run ball tracking
         try:
-            from src.inference_onnx import main as track_main
-            # We would need to pass the args to the tracking module
-            print("Ball tracking mode selected")
+            from src.inference_onnx_seq_gray_v2 import main as track_main
+            print("Ball tracking mode (ONNX) selected")
             print(f"Video: {args.video_path}")
             print(f"Model: {args.model_path}")
             print(f"Visualize: {args.visualize}")
-            # In a full implementation, we would call track_main with appropriate arguments
+
+            # Setting up sys.argv to call track_main
+            sys.argv = [sys.argv[0], "--video_path", args.video_path, "--model_path", args.model_path, "--output_dir", args.output_dir]
+            if args.visualize:
+                sys.argv.append("--visualize")
+
+            track_main()
         except ImportError as e:
             print(f"Error importing tracking module: {e}")
+            return 1
+        except Exception as e:
+            print(f"Error during ball tracking: {e}")
+            return 1
+
+    elif args.mode == "openvino-track":
+        # OpenVINO Ball tracking mode
+        if not args.video_path or not args.model_xml:
+            print("Error: --video_path and --model_xml are required for openvino-track mode")
+            return 1
+
+        try:
+            from src.inference_openvino_seq_gray_v2 import main as ov_track_main
+            print("Ball tracking mode (OpenVINO) selected")
+            print(f"Video: {args.video_path}")
+            print(f"Model XML: {args.model_xml}")
+            print(f"Device: {args.device}")
+
+            sys.argv = [sys.argv[0], "--video_path", args.video_path, "--model_xml", args.model_xml, "--device", args.device, "--output_dir", args.output_dir]
+            if args.visualize:
+                sys.argv.append("--visualize")
+
+            ov_track_main()
+        except ImportError as e:
+            print(f"Error importing OpenVINO tracking module: {e}")
+            return 1
+        except Exception as e:
+            print(f"Error during OpenVINO ball tracking: {e}")
             return 1
             
     elif args.mode == "pose":
@@ -103,13 +142,27 @@ def main():
             
     elif args.mode == "analyze":
         # Analysis mode
-        print("Analysis mode selected")
-        print("This mode is not yet implemented")
+        if not args.csv_path or not args.court_json_path:
+             print("Error: --csv_path and --court_json_path are required for analyze mode")
+             return 1
+
+        try:
+            import subprocess
+            print("Analysis mode selected")
+            cmd = [
+                sys.executable, "scripts/analyze_zone4_ball_trajectories.py",
+                "--csv-path", args.csv_path,
+                "--court-json-path", args.court_json_path
+            ]
+            subprocess.run(cmd, check=True)
+        except Exception as e:
+            print(f"Error during analysis: {e}")
+            return 1
         
     else:
         print("Hello from fast-volleyball-tracking-inference!")
         print("Use --mode to specify the processing mode")
-        print("Available modes: track, pose, analyze")
+        print("Available modes: track, pose, analyze, hub-track, openvino-track")
         
     return 0
 
