@@ -11,7 +11,7 @@ from ball_tracker import BallTracker, Track
 from track_utils import find_cyclic_sequences, find_rolling_sequences
 
 class TrackAnalyzer:
-    """Класс для анализа треков из CSV и визуализации на видео."""
+    """Class for analyzing tracks from CSV and visualization on video."""
     def __init__(
         self,
         csv_path: str,
@@ -41,12 +41,12 @@ class TrackAnalyzer:
     
     def _validate_files(self) -> None:
         if not os.path.exists(self.csv_path):
-            raise FileNotFoundError(f"CSV не найден: {self.csv_path}")
+            raise FileNotFoundError(f"CSV not found: {self.csv_path}")
         if not os.path.exists(self.video_path):
-            raise FileNotFoundError(f"Видео не найдено: {self.video_path}")
+            raise FileNotFoundError(f"Video not found: {self.video_path}")
     
     def _get_cache_key(self) -> str:
-        """Создает хэш на основе параметров и содержимого CSV-файла."""
+        """Creates a hash based on parameters and CSV file content."""
         params = {
             "csv_path": self.csv_path,
             "video_path": self.video_path,
@@ -59,16 +59,16 @@ class TrackAnalyzer:
         }
         params_str = json.dumps(params, sort_keys=True)
         
-        # Хэшируем содержимое CSV-файла
+        # Hashing CSV file content
         with open(self.csv_path, "rb") as f:
             csv_hash = hashlib.md5(f.read()).hexdigest()
         
-        # Комбинируем параметры и хэш CSV
+        # Combining parameters and CSV hash
         combined = params_str + csv_hash
         return hashlib.md5(combined.encode()).hexdigest()
 
     def _load_cache(self) -> Optional[Dict]:
-        """Загружает данные из кэша, если они существуют и валидны."""
+        """Loads data from cache if it exists and is valid."""
         if not os.path.exists(self.cache_file):
             return None
     
@@ -79,12 +79,12 @@ class TrackAnalyzer:
                 if cache_key in cache:
                     return cache[cache_key]
         except (pickle.UnpicklingError, EOFError, AttributeError, KeyError, ImportError) as e:
-            print(f"⚠️  Ошибка при загрузке кэша: {e}. Кэш будет пересоздан.")
-            # Не возвращаем данные — заставим пересчитать
+            print(f"⚠️  Error loading cache: {e}. Cache will be recreated.")
+            # Not returning data - forcing recalculation
         return None
     
     def _save_cache(self, data: Dict) -> None:
-        """Сохраняет данные в кэш."""
+        """Saves data to cache."""
         cache = {}
 
         if os.path.exists(self.cache_file):
@@ -94,10 +94,10 @@ class TrackAnalyzer:
                     if isinstance(loaded, dict):
                         cache = loaded
                     else:
-                        print("⚠️  Кэш имеет неверный формат, будет пересоздан.")
+                        print("⚠️  Cache has incorrect format, will be recreated.")
             except (EOFError, pickle.UnpicklingError, AttributeError, ValueError) as e:
-                print(f"⚠️  Ошибка при чтении кэша для записи: {e}. Кэш будет пересоздан.")
-                # Оставляем cache = {} — начнём с чистого листа
+                print(f"⚠️  Error reading cache for writing: {e}. Cache will be recreated.")
+                # Leaving cache = {} - starting with a clean slate
 
         cache[self._get_cache_key()] = data
 
@@ -105,7 +105,7 @@ class TrackAnalyzer:
             with open(self.cache_file, "wb") as f:
                 pickle.dump(cache, f)
         except Exception as e:
-            print(f"❌ Не удалось сохранить кэш: {e}")
+            print(f"❌ Failed to save cache: {e}")
     
     
     def _load_and_process_csv(self) -> pd.DataFrame:
@@ -123,26 +123,26 @@ class TrackAnalyzer:
         return start1 <= end2 and start2 <= end1
     
     def _trim_bounce_start(self, track: Dict) -> Dict:
-        """Подрезает начало трека, убирая кадры с движением мяча вверх-вниз."""
+        """Trims the beginning of the track, removing frames with ball movement up and down."""
         if not track.positions:
             return track
         orig_start = track.start_frame
         orig_end = track.last_frame
         sequences = find_cyclic_sequences(track.positions)
         if sequences:
-            print("Найдены последовательности набивания мяча:")
+            print("Found ball bouncing sequences:")
             for start, end in sequences:
-                print(f"Начало: кадр {start}, Конец: кадр {end}")
+                print(f"Start: frame {start}, End: frame {end}")
                 track.start_frame = end
                 duration_frames = track.last_frame - track.start_frame + 1
                 track.duration_sec = lambda: duration_frames / self.fps
         else:
-            print("Последовательности набивания мяча не найдены.")
+            print("Ball bouncing sequences not found.")
         sequences = find_rolling_sequences(track.positions)
         if sequences:
-            print("Найдены последовательности качения мяча:")
+            print("Found ball rolling sequences:")
             for start, end in sequences:
-                print(f"Начало: кадр {start}, Конец: кадр {end}")
+                print(f"Start: frame {start}, End: frame {end}")
                 track.last_frame = start
                 duration_frames = track.last_frame - track.start_frame + 1
                 track.duration_sec = lambda: duration_frames / self.fps
@@ -178,7 +178,7 @@ class TrackAnalyzer:
                 if self._is_overlapping(track1, track2):
                     used_indices.add(j)
                     print(
-                        f"Удалён трек {track2.track_id} (пересекается с треком {track1.track_id})"
+                        f"Track deleted {track2.track_id} (overlaps with track {track1.track_id})"
                     )
         frames_to_extend = int(self.fps)
         extended_episodes = []
@@ -210,7 +210,7 @@ class TrackAnalyzer:
                     merged_track_ids.append(track2.track_id)
                     used_indices.add(j)
                     print(
-                        f"Объединён трек {track2.track_id} с треком {merged_track.track_id}"
+                        f"Track merged {track2.track_id} with track {merged_track.track_id}"
                     )
             merged_track.positions = sorted(
                 merged_positions, key=lambda x: x[1]
@@ -229,12 +229,12 @@ class TrackAnalyzer:
         return sorted(merged_episodes, key=lambda x: x.start_frame)
     
     def _process_detections(self, df: pd.DataFrame) -> None:
-        # Проверяем кэш
+        # Check cache
         cached_data = self._load_cache()
         if cached_data:
             self.tracks = cached_data["tracks"]
             self.track_distances = cached_data["track_distances"]
-            print("Загружены данные из кэша.")
+            print("Data loaded from cache.")
             return
         
         tracker = BallTracker(
@@ -275,7 +275,7 @@ class TrackAnalyzer:
             episodes.append(track)
         self.tracks = self._filter_short_tracks(episodes)
         
-        # Сохраняем в кэш
+        # Save to cache
         cache_data = {
             "tracks": self.tracks,
             "track_distances": self.track_distances
@@ -283,9 +283,9 @@ class TrackAnalyzer:
         self._save_cache(cache_data)
     
     def _print_track_info(self) -> None:
-        print("\n=== Список треков ===")
-        print(f"Минимальная длительность трека: {self.min_duration_sec} сек")
-        print(f"Найдено треков: {len(self.tracks)}")
+        print("\n=== Track List ===")
+        print(f"Minimum track duration: {self.min_duration_sec} sec")
+        print(f"Tracks found: {len(self.tracks)}")
         print("ID\tStart Frame\tLast Frame\tDuration (sec)\tLength (frames)")
         print("-" * 60)
         for track in self.tracks:
@@ -295,10 +295,10 @@ class TrackAnalyzer:
                 f"{track.duration_sec():.2f}\t\t{track.size()}\t({distance_reason})"
             )
         if not self.tracks:
-            print("Нет треков, удовлетворяющих критериям.")
+            print("No tracks meeting the criteria.")
     
     def _save_tacks_to_file(self, track) -> None:
-        """Сохраняет трек в JSON-файл в подкаталог, соответствующий имени видеофайла."""
+        """Saves track to JSON file in a subdirectory corresponding to the video filename."""
         video_name = os.path.splitext(os.path.basename(self.video_path))[0]
         file_path = f'track_json/{video_name}/track_{track.track_id:04d}.json'
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -308,7 +308,7 @@ class TrackAnalyzer:
     def visualize_tracks(self) -> None:
         cap = cv2.VideoCapture(self.video_path)
         if not cap.isOpened():
-            raise ValueError(f"Не удалось открыть видео: {self.video_path}")
+            raise ValueError(f"Failed to open video: {self.video_path}")
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS) or self.fps
@@ -378,9 +378,9 @@ class TrackAnalyzer:
             out.release()
         cv2.destroyAllWindows()
         if self.output_path:
-            print(f"Видео сохранено: {self.output_path}")
+            print(f"Video saved: {self.output_path}")
         else:
-            print("Визуализация завершена")
+            print("Visualization completed")
     
     def run(self) -> None:
         self._validate_files()
@@ -391,48 +391,48 @@ class TrackAnalyzer:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Анализ треков из CSV и визуализация на видео."
+        description="Track analysis from CSV and visualization on video."
     )
-    parser.add_argument("--csv_path", type=str, required=True, help="Путь к ball.csv")
-    parser.add_argument("--video_path", type=str, required=True, help="Путь к видео")
+    parser.add_argument("--csv_path", type=str, required=True, help="Path to ball.csv")
+    parser.add_argument("--video_path", type=str, required=True, help="Path to video")
     parser.add_argument(
         "--output_path",
         type=str,
         default=None,
-        help="Путь для сохранения выходного видео в формате AVI",
+        help="Path for saving output video in AVI format",
     )
     parser.add_argument(
-        "--fps", type=float, default=30, help="FPS видео (по умолчанию 30)"
+        "--fps", type=float, default=30, help="Video FPS (default 30)"
     )
     parser.add_argument(
         "--max_distance",
         type=float,
         default=200,
-        help="Максимальное расстояние для трекинга",
+        help="Maximum distance for tracking",
     )
     parser.add_argument(
         "--min_duration_sec",
         type=float,
         default=1.0,
-        help="Минимальная длительность трека (сек)",
+        help="Minimum track duration (sec)",
     )
     parser.add_argument(
         "--max_x_displacement",
         type=float,
         default=20.0,
-        help="Максимальное перемещение по X для определения навеса (пиксели)",
+        help="Maximum X movement for overhead detection (pixels)",
     )
     parser.add_argument(
         "--min_y_displacement",
         type=float,
         default=50.0,
-        help="Минимальное перемещение по Y для определения навеса (пиксели)",
+        help="Minimum Y movement for overhead detection (pixels)",
     )
     parser.add_argument(
         "--bounce_frames",
         type=int,
         default=10,
-        help="Количество кадров для анализа навеса",
+        help="Number of frames for overhead analysis",
     )
     args = parser.parse_args()
     analyzer = TrackAnalyzer(

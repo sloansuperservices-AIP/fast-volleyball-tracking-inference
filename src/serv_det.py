@@ -7,23 +7,23 @@ import os
 
 
 def load_track_data(file_path: str) -> List[List]:
-    """Загружает данные траектории мяча из JSON-файла."""
+    """Loads ball trajectory data from a JSON file."""
     try:
         with open(file_path, "r") as f:
             data = json.load(f)
         return data["positions"]
     except FileNotFoundError:
-        print(f"Файл {file_path} не найден.")
+        print(f"File {file_path} not found.")
         return []
     except KeyError:
-        print(f"Ключ 'positions' не найден в файле {file_path}.")
+        print(f"Key 'positions' not found in file {file_path}.")
         return []
 
 
 def merge_cyclic_sequences(
     sequences: List[Tuple[int, int]], max_frame_gap: int = 10
 ) -> List[Tuple[int, int]]:
-    """Объединяет циклические участки, если расстояние между ними не превышает max_frame_gap кадров."""
+    """Merges cyclic sections if the distance between them does not exceed max_frame_gap frames."""
     if not sequences:
         return []
 
@@ -49,7 +49,7 @@ def find_cyclic_sequences(
     min_num_amplitudes: int = 3,
     max_frame_gap: int = 10,
 ) -> List[Tuple[int, int]]:
-    """Находит участки с регулярными циклическими движениями мяча (≥2 цикла)."""
+    """Finds sections with regular cyclic ball movements (≥2 cycles)."""
     if not positions or len(positions) < 10:
         return []
 
@@ -148,11 +148,11 @@ def find_cyclic_sequences(
 
 def find_rolling_sequences(
     positions: List[List],
-    max_y_range: float = 40.0,  # Уменьшено для трека 0005
+    max_y_range: float = 40.0,  # Reduced for track 0005
     min_x_range: float = 50.0,
-    min_length: int = 60,  # Уменьшено для коротких участков
+    min_length: int = 60,  # Reduced for short sections
 ) -> List[Tuple[int, int]]:
-    """Находит участки, где мяч катится по полу (малый размах Y, большой размах X)."""
+    """Finds sections where the ball is rolling on the floor (small Y range, large X range)."""
     if not positions or len(positions) < min_length:
         return []
 
@@ -191,84 +191,84 @@ def plot_2d_trajectory(
     cyclic_sequences: List[Tuple[int, int]],
     rolling_sequences: List[Tuple[int, int]],
 ):
-    """Строит три 2D-графика: X от frame_num, Y от frame_num и траекторию X-Y,
-    выделяя циклические участки красным и участки качения зеленым.
+    """Builds three 2D graphs: X vs frame_num, Y vs frame_num, and X-Y trajectory,
+    highlighting cyclic sections in red and rolling sections in green.
     """
     if not positions:
-        print(f"Нет данных для построения графиков для файла {file_name}.")
+        print(f"No data for plotting graphs for file {file_name}.")
         return
 
     x = np.array([pos[0][0] for pos in positions])
     y = np.array([pos[0][1] for pos in positions])
     frames = np.array([pos[1] for pos in positions])
 
-    # Уменьшаем высоту фигуры для лучшего соответствия экрану
+    # Reducing figure height for better screen fit
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 8), constrained_layout=True)
 
-    # График X(frame)
-    ax1.plot(frames, x, c="#1E90FF", linewidth=1, label="X (обычный)")
+    # X(frame) Graph
+    ax1.plot(frames, x, c="#1E90FF", linewidth=1, label="X (normal)")
     for start, end in cyclic_sequences:
         mask = (frames >= start) & (frames <= end)
-        ax1.plot(frames[mask], x[mask], c="red", linewidth=2, label="X (циклический)")
+        ax1.plot(frames[mask], x[mask], c="red", linewidth=2, label="X (cyclic)")
         ax1.axvline(start, color="gray", linestyle="--", alpha=0.5)
         ax1.axvline(end, color="gray", linestyle="--", alpha=0.5)
     for start, end in rolling_sequences:
         mask = (frames >= start) & (frames <= end)
-        ax1.plot(frames[mask], x[mask], c="green", linewidth=2, label="X (качение)")
+        ax1.plot(frames[mask], x[mask], c="green", linewidth=2, label="X (rolling)")
         ax1.axvline(start, color="darkgreen", linestyle="-.", alpha=0.5)
         ax1.axvline(end, color="darkgreen", linestyle="-.", alpha=0.5)
-    ax1.set_xlabel("Номер кадра")
-    ax1.set_ylabel("X (пиксели)")
-    ax1.set_title(f"Координата X ({file_name})")
-    # Удаляем дублирующиеся метки в легенде
+    ax1.set_xlabel("Frame number")
+    ax1.set_ylabel("X (pixels)")
+    ax1.set_title(f"X coordinate ({file_name})")
+    # Removing duplicate labels in legend
     handles, labels = ax1.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
     ax1.legend(by_label.values(), by_label.keys(), loc="best")
     ax1.grid(True)
 
-    # График Y(frame)
-    ax2.plot(frames, y, c="#1E90FF", linewidth=1, label="Y (обычный)")
+    # Y(frame) Graph
+    ax2.plot(frames, y, c="#1E90FF", linewidth=1, label="Y (normal)")
     for start, end in cyclic_sequences:
         mask = (frames >= start) & (frames <= end)
-        ax2.plot(frames[mask], y[mask], c="red", linewidth=2, label="Y (циклический)")
+        ax2.plot(frames[mask], y[mask], c="red", linewidth=2, label="Y (cyclic)")
         ax2.axvline(start, color="gray", linestyle="--", alpha=0.5)
         ax2.axvline(end, color="gray", linestyle="--", alpha=0.5)
     for start, end in rolling_sequences:
         mask = (frames >= start) & (frames <= end)
-        ax2.plot(frames[mask], y[mask], c="green", linewidth=2, label="Y (качение)")
+        ax2.plot(frames[mask], y[mask], c="green", linewidth=2, label="Y (rolling)")
         ax2.axvline(start, color="darkgreen", linestyle="-.", alpha=0.5)
         ax2.axvline(end, color="darkgreen", linestyle="-.", alpha=0.5)
-    ax2.set_xlabel("Номер кадра")
-    ax2.set_ylabel("Y (пиксели)")
-    ax2.set_title(f"Координата Y ({file_name})")
+    ax2.set_xlabel("Frame number")
+    ax2.set_ylabel("Y (pixels)")
+    ax2.set_title(f"Y coordinate ({file_name})")
     ax2.invert_yaxis()
     handles, labels = ax2.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
     ax2.legend(by_label.values(), by_label.keys(), loc="best")
     ax2.grid(True)
 
-    # График X-Y
-    ax3.plot(x, y, c="#1E90FF", linewidth=1, label="Траектория (обычная)")
+    # X-Y Graph
+    ax3.plot(x, y, c="#1E90FF", linewidth=1, label="Trajectory (normal)")
     for start, end in cyclic_sequences:
         mask = (frames >= start) & (frames <= end)
         ax3.plot(
-            x[mask], y[mask], c="red", linewidth=2, label="Траектория (циклическая)"
+            x[mask], y[mask], c="red", linewidth=2, label="Trajectory (cyclic)"
         )
     for start, end in rolling_sequences:
         mask = (frames >= start) & (frames <= end)
-        ax3.plot(x[mask], y[mask], c="green", linewidth=2, label="Траектория (качение)")
-    ax3.set_xlabel("X (пиксели)")
-    ax3.set_ylabel("Y (пиксели)")
-    ax3.set_title(f"Траектория X-Y ({file_name})")
+        ax3.plot(x[mask], y[mask], c="green", linewidth=2, label="Trajectory (rolling)")
+    ax3.set_xlabel("X (pixels)")
+    ax3.set_ylabel("Y (pixels)")
+    ax3.set_title(f"X-Y Trajectory ({file_name})")
     ax3.invert_yaxis()
     handles, labels = ax3.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
     ax3.legend(by_label.values(), by_label.keys(), loc="best")
     ax3.grid(True)
 
-    # Выводим найденные участки
+    # Displaying found sections
     if cyclic_sequences or rolling_sequences:
-        print(f"Участки для {file_name}:")
+        print(f"Sections for {file_name}:")
         start_frame = int(frames[0]) if len(frames) > 0 else None
         end_frame = int(frames[-1]) if len(frames) > 0 else None
         try:
@@ -279,23 +279,23 @@ def plot_2d_trajectory(
             f"track_id: {track_id}, start_frame: {start_frame}, end_frame: {end_frame}"
         )
         for start, end in cyclic_sequences:
-            print(f"Циклический участок: Начало: кадр {start}, Конец: кадр {end}")
+            print(f"Cyclic section: Start: frame {start}, End: frame {end}")
         for start, end in rolling_sequences:
-            print(f"Участок качения: Начало: кадр {start}, Конец: кадр {end}")
+            print(f"Rolling section: Start: frame {start}, End: frame {end}")
 
     plt.show()
 
 
 
 def main():
-    """Основная функция для обработки всех файлов из каталога track_json и построения графиков."""
+    """Main function to process all files from track_json directory and plot graphs."""
     import argparse
-    parser = argparse.ArgumentParser(description="Анализ треков и построение графиков.")
+    parser = argparse.ArgumentParser(description="Track analysis and plotting.")
     parser.add_argument(
         "--tracks_dir",
         type=str,
         default="track_json",
-        help="Каталог с json-файлами треков (по умолчанию track_json)"
+        help="Directory with track json files (default track_json)"
     )
     args = parser.parse_args()
     base_path = args.tracks_dir
@@ -303,7 +303,7 @@ def main():
     track_files.sort()
     for track_file in track_files:
         file_path = os.path.join(base_path, track_file)
-        print(f"\nОбработка файла: {track_file}")
+        print(f"\nProcessing file: {track_file}")
         positions = load_track_data(file_path)
         cyclic_sequences = find_cyclic_sequences(positions, max_frame_gap=10)
         rolling_sequences = find_rolling_sequences(positions)

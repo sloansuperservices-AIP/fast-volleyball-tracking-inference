@@ -13,7 +13,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# --- Глобальные параметры ---
+# --- Global parameters ---
 DETECTION_THRESHOLD = 0.5
 DISTANCE_TOLERANCE = 9
 DEFAULT_OUTPUT_DIR = "test_results"
@@ -218,7 +218,7 @@ def process_video(
         "total_frames": 0,
         "detected_frames": 0,
     }
-    center_idx = out_dim // 2  # центральный фрейм в последовательности
+    center_idx = out_dim // 2  # central frame in sequence
 
     pbar = tqdm(
         total=total_frames, desc=f"Processing {Path(video_path).name}", unit="frame"
@@ -396,7 +396,7 @@ def main():
     output_dir = Path(args.output_dir) / f"multi_model_test_{timestamp}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Сохраняем конфиг
+    # Saving config
     with open(output_dir / "test_config.json", "w") as f:
         json.dump(vars(args), f, indent=2)
 
@@ -408,13 +408,13 @@ def main():
     print(f"🚀 Found {len(video_paths)} videos.")
     print(f"🧪 Testing {len(args.model_paths)} models...")
 
-    # Список для хранения результатов по каждой модели
+    # List to store results for each model
     model_results = []
 
     for i, model_path in enumerate(args.model_paths):
         print(f"\n🔄 TESTING MODEL [{i+1}/{len(args.model_paths)}]: {model_path}")
 
-        # Включаем визуализацию только для последней модели, если указано
+        # Enable visualization only for the last model if specified
         visualize = args.visualize and (i == len(args.model_paths) - 1)
 
         session, has_gru, out_dim, h0_shape = load_onnx_model(model_path)
@@ -450,7 +450,7 @@ def main():
         test_time = time.time() - start_time
         metrics = calculate_metrics(all_results)
 
-        # Сохраняем результаты модели
+        # Saving model results
         model_results.append(
             {
                 "model": model_path,
@@ -461,10 +461,10 @@ def main():
             }
         )
 
-        # Выводим результаты текущей модели
+        # Displaying current model results
         print_results(metrics, all_results, args, test_time)
 
-    # Генерация сводной таблицы
+    # Generating summary table
     df_summary = generate_summary_table(model_results, output_dir)
     print_summary_table(df_summary)
     generate_summary_plot(df_summary, output_dir)

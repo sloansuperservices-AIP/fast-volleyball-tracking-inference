@@ -123,11 +123,11 @@ def main():
     pos_dict = {int(f): (x, y) for x, y, f in positions}
 
     serves = detect_serves(positions)
-    print(f"Обнаружено подач: {len(serves)} на кадрах: {serves}")
+    print(f"Serves detected: {len(serves)} on frames: {serves}")
 
     cap = cv2.VideoCapture(args.video_path)
     if not cap.isOpened():
-        print(f"Ошибка: не удалось открыть видео {args.video_path}")
+        print(f"Error: failed to open video {args.video_path}")
         return
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
@@ -136,16 +136,16 @@ def main():
     paused = False
     show_graphs = True
 
-    print("Управление:")
-    print("  Пробел — пауза/воспроизведение")
-    print("  q — выход")
-    print("  g — скрыть/показать графики")
+    print("Controls:")
+    print("  Space - pause/play")
+    print("  q - exit")
+    print("  g - hide/show graphs")
 
     while frame_count <= last_frame:
         if not paused:
             ret, frame = cap.read()
             if not ret:
-                print("Видео закончилось.")
+                print("Video ended.")
                 break
         else:
             ret, frame = cap.read()

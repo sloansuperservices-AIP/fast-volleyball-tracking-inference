@@ -5,61 +5,61 @@ import numpy as np
 def merge_sequences(
     sequences: list[tuple[int, int]], max_frame_gap: int = 10
 ) -> list[tuple[int, int]]:
-    """Объединяет циклические участки, если расстояние между ними не превышает max_frame_gap кадров.
+    """Merges cyclic sections if the distance between them does not exceed max_frame_gap frames.
 
     Args:
-        sequences: Список кортежей (start_frame, end_frame) для циклических участков.
-        max_frame_gap: Максимальное расстояние между участками (в кадрах) для их объединения.
+        sequences: List of tuples (start_frame, end_frame) for cyclic sections.
+        max_frame_gap: Maximum distance between sections (in frames) for merging them.
 
     Returns:
-        Список объединенных кортежей (start_frame, end_frame).
+        List of merged tuples (start_frame, end_frame).
     """
     if not sequences:
         return []
 
-    # Сортируем по началу
+    # Sorting by start
     sequences = sorted(sequences, key=lambda x: x[0])
     merged = []
     current_start, current_end = sequences[0]
 
     for start, end in sequences[1:]:
         if start <= current_end + max_frame_gap:
-            # Участки пересекаются или находятся в пределах max_frame_gap, обновляем конец
+            # Sections overlap or are within max_frame_gap, updating end
             current_end = max(current_end, end)
         else:
-            # Новый участок, добавляем предыдущий и начинаем новый
+            # New section, adding previous and starting new
             merged.append((current_start, current_end))
             current_start, current_end = start, end
 
-    # Добавляем последний объединенный участок
+    # Adding the last merged section
     merged.append((current_start, current_end))
     return merged
 
 
 def find_cyclic_sequences(
     positions: list[list],
-    min_cycle_amplitude: float = 30.0,  # Минимальная амплитуда одного цикла (размах)
-    max_amplitude_variation: float = 50.0,  # Макс. отличие амплитуд между циклами
-    min_num_amplitudes: int = 4,  # Мин. число амплитуд для последовательности (~2 цикла)
+    min_cycle_amplitude: float = 30.0,  # Minimum amplitude of one cycle (range)
+    max_amplitude_variation: float = 50.0,  # Max amplitude variation between cycles
+    min_num_amplitudes: int = 4,  # Min number of amplitudes for a sequence (~2 cycles)
 ) -> list[tuple[int, int]]:
-    """Находит участки с регулярными циклическими движениями мяча (≥2 цикла),
-    где амплитуды колебаний отличаются не более чем на max_amplitude_variation.
-    Доработано для детекции локальных стабильных циклов (например, набивка мяча перед подачей),
-    даже если общая вариация амплитуд большая — ищем подпоследовательности.
+    """Finds sections with regular cyclic ball movements (≥2 cycles),
+    where oscillation amplitudes differ by no more than max_amplitude_variation.
+    Improved for detection of local stable cycles (e.g., ball bouncing before serving),
+    even if total amplitude variation is large - looking for subsequences.
 
     Args:
-        positions: Список позиций в формате [[x, y], frame].
-        min_cycle_amplitude: Минимальный размах Y для признания цикла значимым.
-        max_amplitude_variation: Максимальное различие между амплитудами циклов.
-        min_num_amplitudes: Минимальное количество consecutive амплитуд для последовательности.
+        positions: List of positions in format [[x, y], frame].
+        min_cycle_amplitude: Minimum Y range to recognize cycles as significant.
+        max_amplitude_variation: Maximum difference between cycle amplitudes.
+        min_num_amplitudes: Minimum number of consecutive amplitudes for a sequence.
 
     Returns:
-        Список кортежей (start_frame, end_frame) для стабильных циклических участков.
+        List of tuples (start_frame, end_frame) for stable cyclic sections.
     """
     if not positions or len(positions) < 10:
         return []
 
-    # Преобразуем в массив
+    # Convert to array
     pos_array = np.array(
         [(pos[0][0], pos[0][1], pos[1]) for pos in positions], dtype=np.float64
     )
@@ -75,14 +75,14 @@ def find_cyclic_sequences(
         start_idx = i
         j = i + 1
 
-        # Ищем участок с малым изменением X
+        # Looking for a section with small X change
         while j < n:
             x_range = np.max(x_values[i : j + 1]) - np.min(x_values[i : j + 1])
             if x_range > 150:
                 break
             j += 1
 
-        if j - i < 100:  # слишком короткий участок
+        if j - i < 100:  # section too short
             i = j
             continue
 
@@ -92,7 +92,7 @@ def find_cyclic_sequences(
             i = j
             continue
 
-        # Находим пики и впадины
+        # Finding peaks and valleys
         peaks, _ = find_peaks(y_segment, prominence=10)
         troughs, _ = find_peaks(-y_segment, prominence=10)
 
@@ -100,13 +100,13 @@ def find_cyclic_sequences(
             i = j
             continue
 
-        # Сортируем события по индексу
+        # Sorting events by index
         events = sorted(
             [(p, "peak") for p in peaks] + [(t, "trough") for t in troughs],
             key=lambda x: x[0],
         )
 
-        # Извлекаем амплитуды (все, без фильтра пока)
+        # Extracting amplitudes (all, no filter yet)
         amplitudes = []
         for k in range(1, len(events)):
             prev_idx, _ = events[k - 1]
@@ -118,7 +118,7 @@ def find_cyclic_sequences(
             i = j
             continue
 
-        # Шаг 1: Находим "хорошие" сегменты амплитуд, где все >= min_cycle_amplitude (без малых переходов)
+        # Step 1: Finding 'good' amplitude segments where all >= min_cycle_amplitude (no small transitions)
         good_segments = []
         amp_idx = 0
         while amp_idx < len(amplitudes):
@@ -132,7 +132,7 @@ def find_cyclic_sequences(
                 good_segments.append((amp_idx, amp_j))
             amp_idx = amp_j
 
-        # Шаг 2: Для каждого хорошего сегмента ищем подпоследовательности с похожими амплитудами (range <= var)
+        # Step 2: For each good segment, looking for subsequences with similar amplitudes (range <= var)
         for amp_start, amp_end in good_segments:
             left = amp_start
             for right in range(amp_start, amp_end):
@@ -146,16 +146,16 @@ def find_cyclic_sequences(
                         sub_min = min(sub)
                         sub_max = max(sub)
                 if right - left + 1 >= min_num_amplitudes:
-                    # Добавляем участок (от события left до события right+1)
+                    # Adding section (from event left to event right+1)
                     event_left = events[left][0]
                     event_right = events[right + 1][0]
                     f_start = int(frames[i + event_left])
                     f_end = int(frames[i + event_right])
                     sequences.append((f_start, f_end))
-                    # Переходим к следующему непересекающемуся
+                    # Moving to the next non-overlapping
                     left = right + 1
 
-        i = j  # переходим к следующему сегменту
+        i = j  # moving to the next segment
     sequences = merge_sequences(sequences)
 
     return sequences
@@ -163,11 +163,11 @@ def find_cyclic_sequences(
 
 def find_rolling_sequences(
     positions: list[list],
-    max_y_range: float = 40.0,  # Уменьшено для трека 0005
+    max_y_range: float = 40.0,  # Reduced for track 0005
     min_x_range: float = 50.0,
-    min_length: int = 70,  # Уменьшено для коротких участков
+    min_length: int = 70,  # Reduced for short sections
 ) -> list[tuple[int, int]]:
-    """Находит участки, где мяч катится по полу (малый размах Y, большой размах X)."""
+    """Finds sections where the ball is rolling on the floor (small Y range, large X range)."""
     if not positions or len(positions) < min_length:
         return []
 
