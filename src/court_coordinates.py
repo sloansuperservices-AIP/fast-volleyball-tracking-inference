@@ -211,14 +211,14 @@ def draw_ui(frame, keypoints, current_idx, frame_index, frame_count, output_path
 def annotate_video(video_path, output_dir):
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
-        raise RuntimeError(f"Failed to open video: {video_path}")
+        raise RuntimeError(f"Не удалось открыть видео: {video_path}")
 
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     if frame_count <= 0 or frame_width <= 0 or frame_height <= 0:
         cap.release()
-        raise RuntimeError("Failed to obtain video parameters")
+        raise RuntimeError("Не удалось получить параметры видео")
 
     output_path = make_output_path(video_path, output_dir)
     keypoints, frame_index = load_existing_annotation(output_path, frame_width, frame_height)

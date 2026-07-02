@@ -80,11 +80,11 @@ def infer_model_params(model_path):
 def load_model(model_path, device="CPU"):
     path = Path(model_path)
     if not path.exists():
-        raise FileNotFoundError(f"Model not found: {path}")
+        raise FileNotFoundError(f"Модель не найдена: {path}")
     if path.suffix.lower() == ".xml":
         model_bin = path.with_suffix(".bin")
         if not model_bin.exists():
-            raise FileNotFoundError(f"BIN not found: {model_bin}")
+            raise FileNotFoundError(f"BIN не найден: {model_bin}")
 
     model_params = infer_model_params(path)
     core = Core()
@@ -101,19 +101,19 @@ def load_model(model_path, device="CPU"):
         model_params["input_width"],
     ]
 
-    print(f"Original input shape: {pshape}")
+    print(f"Исходная форма входа: {pshape}")
     if pshape.is_dynamic:
-        print(f"Dynamic shape - fixing at {expected_shape}")
+        print(f"Динамическая форма — фиксируем на {expected_shape}")
         model.reshape({input_layer.any_name: expected_shape})
 
     compiled_model = core.compile_model(model=model, device_name=device)
     input_layer = compiled_model.input(0)
     output_layer = compiled_model.output(0)
 
-    print(f"Model loaded on: {device}")
-    print(f"  Input: {input_layer.any_name} {input_layer.shape}")
-    print(f"  Output: {output_layer.any_name} {output_layer.shape}")
-    print(f"  Family: {model_params['family']}")
+    print(f"Модель загружена на: {device}")
+    print(f"  Вход: {input_layer.any_name} {input_layer.shape}")
+    print(f"  Выход: {output_layer.any_name} {output_layer.shape}")
+    print(f"  Семейство: {model_params['family']}")
 
     return compiled_model, input_layer, output_layer, model_params
 
@@ -121,7 +121,7 @@ def load_model(model_path, device="CPU"):
 def initialize_video(video_path):
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
-        raise ValueError(f"Cannot open video: {video_path}")
+        raise ValueError(f"Не открыть видео: {video_path}")
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
@@ -540,7 +540,7 @@ def main():
     }
     prev_gray = None
     frame_index = 0
-    pbar = tqdm(total=total, desc="Processing", unit="frame")
+    pbar = tqdm(total=total, desc="Обработка", unit="кадр")
     visualization_enabled = initialize_visualization(args.visualize)
 
     try:
