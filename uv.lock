@@ -416,6 +416,12 @@ gpu = [
     { name = "onnxruntime-gpu" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-mock" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "celery", extras = ["redis"], specifier = ">=5.5.3" },
@@ -443,6 +449,12 @@ requires-dist = [
     { name = "ultralytics", specifier = ">=8.0.0" },
 ]
 provides-extras = ["gpu", "dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "pytest-mock", specifier = ">=3.15.1" },
+]
 
 [[package]]
 name = "ffmpeg-python"
