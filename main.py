@@ -32,6 +32,9 @@ def main():
     parser.add_argument("--visualize", action="store_true", 
                         help="Enable visualization on display using cv2")
     parser.add_argument("--only_csv", action="store_true", help="Only output CSV, no video")
+    parser.add_argument("--device", type=str, default="CPU", help="OpenVINO device (CPU, GPU, AUTO)")
+    parser.add_argument("--rotate", type=int, default=0, choices=[-90, 0, 90, 180, -180],
+                        help="Rotate frames before inference/output: -90 counterclockwise, 90 clockwise, 180 upside down")
     
     # Hub specific arguments
     parser.add_argument("--hub_model", type=str, default="https://hub.ultralytics.com/models/ITKRtcQHITZrgT2ZNpRq",
@@ -83,6 +86,8 @@ def main():
             cmd.append("--visualize")
         if args.only_csv:
             cmd.append("--only_csv")
+        if args.rotate != 0:
+            cmd.extend(["--rotate", str(args.rotate)])
 
         print(f"Running ONNX tracking: {' '.join(cmd)}")
         return run_command(cmd)
@@ -95,11 +100,14 @@ def main():
         cmd = [python_exe, "src/inference_openvino_seq_gray_v2.py",
                "--video_path", args.video_path,
                "--model_xml", args.model_xml,
-               "--output_dir", args.output_dir]
+               "--output_dir", args.output_dir,
+               "--device", args.device]
         if args.visualize:
             cmd.append("--visualize")
         if args.only_csv:
             cmd.append("--only_csv")
+        if args.rotate != 0:
+            cmd.extend(["--rotate", str(args.rotate)])
             
         print(f"Running OpenVINO tracking: {' '.join(cmd)}")
         return run_command(cmd)
