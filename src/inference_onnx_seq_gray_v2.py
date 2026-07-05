@@ -81,17 +81,41 @@ def parse_args():
         default=DEFAULT_HEATMAP_THRESHOLD,
         help="Heatmap confidence threshold",
     )
+    parser.add_argument(
+        "--rotate",
+        type=int,
+        default=0,
+        choices=[-90, 0, 90, 180, -180],
+        help="Rotate frames before inference/output: -90 counterclockwise, 90 clockwise, 180 upside down",
+    )
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     return parser.parse_args()
 
 
+def rotated_dimensions(width, height, rotate):
+    if abs(rotate) == 90:
+        return height, width
+    return width, height
+
+
+def rotate_frame(frame, rotate):
+    if rotate == -90:
+        return cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    if rotate == 90:
+        return cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+    if abs(rotate) == 180:
+        return cv2.rotate(frame, cv2.ROTATE_180)
+    return frame
+
+
 def infer_model_params(model_path: str) -> dict:
-    model_name = Path(model_path).name.lower()
-    if "vballnetgrid" in model_name:
+    path_str = str(model_path).lower()
+    seq = 15 if "seq15" in path_str else 9 if "seq9" in path_str else 3
+    if "vballnetgrid" in path_str:
         return {
             "family": "grid",
-            "seq": 9,
-            "input_seq": 9,
+            "seq": seq,
+            "input_seq": seq,
             "input_width": GRID_INPUT_WIDTH,
             "input_height": GRID_INPUT_HEIGHT,
             "grid_cols": GRID_COLS,
@@ -99,8 +123,8 @@ def infer_model_params(model_path: str) -> dict:
         }
     return {
         "family": "heatmap",
-        "seq": 15 if "seq15" in model_name else 9 if "seq9" in model_name else 3,
-        "input_seq": 15 if "seq15" in model_name else 9,
+        "seq": seq,
+        "input_seq": 15 if "seq15" in path_str else 9,
         "input_width": DEFAULT_INPUT_WIDTH,
         "input_height": DEFAULT_INPUT_HEIGHT,
         "grid_cols": None,
@@ -506,7 +530,7 @@ class BallTrackState:
         return list(self._track.points())
 
 
-def frame_reader(cap, frame_queue, batch_size, stop_event, error_queue):
+def frame_reader(cap, frame_queue, batch_size, stop_event, error_queue, rotate=0):
     try:
         while not stop_event.is_set():
             frames = []
@@ -516,6 +540,8 @@ def frame_reader(cap, frame_queue, batch_size, stop_event, error_queue):
                 ret, frame = cap.read()
                 if not ret:
                     break
+                if rotate != 0:
+                    frame = rotate_frame(frame, rotate)
                 frames.append(frame)
             if frames:
                 frame_queue.put(frames, timeout=1.0)
@@ -567,9 +593,10 @@ def main():
     input_width = model_params["input_width"]
     input_height = model_params["input_height"]
 
-    cap, frame_width, frame_height, fps, total_frames = initialize_video(
+    cap, orig_width, orig_height, fps, total_frames = initialize_video(
         args.video_path
     )
+    frame_width, frame_height = rotated_dimensions(orig_width, orig_height, args.rotate)
     video_basename = os.path.splitext(os.path.basename(args.video_path))[0]
     out_writer, _ = setup_output_writer(
         video_basename, args.output_dir, frame_width, frame_height, fps, args.only_csv
@@ -594,7 +621,7 @@ def main():
 
     reader_thread = threading.Thread(
         target=frame_reader,
-        args=(cap, frame_queue, batch_size, stop_event, error_queue),
+        args=(cap, frame_queue, batch_size, stop_event, error_queue, args.rotate),
         daemon=True,
     )
     reader_thread.start()
