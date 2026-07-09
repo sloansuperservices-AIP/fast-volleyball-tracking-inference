@@ -81,6 +81,13 @@ def parse_args():
         default=DEFAULT_HEATMAP_THRESHOLD,
         help="Heatmap confidence threshold",
     )
+    parser.add_argument(
+        "--rotate",
+        type=int,
+        default=0,
+        choices=[-90, 0, 90, 180, -180],
+        help="Rotate frames before inference/output: -90 counterclockwise, 90 clockwise, 180 upside down",
+    )
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     return parser.parse_args()
 
@@ -192,6 +199,22 @@ def initialize_video(video_path):
     fps = int(cap.get(cv2.CAP_PROP_FPS))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     return cap, frame_width, frame_height, fps, total_frames
+
+
+def rotated_dimensions(width, height, rotate):
+    if abs(rotate) == 90:
+        return height, width
+    return width, height
+
+
+def rotate_frame(frame, rotate):
+    if rotate == -90:
+        return cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    if rotate == 90:
+        return cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+    if abs(rotate) == 180:
+        return cv2.rotate(frame, cv2.ROTATE_180)
+    return frame
 
 
 def setup_output_writer(
@@ -506,7 +529,7 @@ class BallTrackState:
         return list(self._track.points())
 
 
-def frame_reader(cap, frame_queue, batch_size, stop_event, error_queue):
+def frame_reader(cap, frame_queue, batch_size, stop_event, error_queue, rotate=0):
     try:
         while not stop_event.is_set():
             frames = []
@@ -516,6 +539,8 @@ def frame_reader(cap, frame_queue, batch_size, stop_event, error_queue):
                 ret, frame = cap.read()
                 if not ret:
                     break
+                if rotate != 0:
+                    frame = rotate_frame(frame, rotate)
                 frames.append(frame)
             if frames:
                 frame_queue.put(frames, timeout=1.0)
@@ -567,9 +592,10 @@ def main():
     input_width = model_params["input_width"]
     input_height = model_params["input_height"]
 
-    cap, frame_width, frame_height, fps, total_frames = initialize_video(
+    cap, orig_width, orig_height, fps, total_frames = initialize_video(
         args.video_path
     )
+    frame_width, frame_height = rotated_dimensions(orig_width, orig_height, args.rotate)
     video_basename = os.path.splitext(os.path.basename(args.video_path))[0]
     out_writer, _ = setup_output_writer(
         video_basename, args.output_dir, frame_width, frame_height, fps, args.only_csv
@@ -594,7 +620,7 @@ def main():
 
     reader_thread = threading.Thread(
         target=frame_reader,
-        args=(cap, frame_queue, batch_size, stop_event, error_queue),
+        args=(cap, frame_queue, batch_size, stop_event, error_queue, args.rotate),
         daemon=True,
     )
     reader_thread.start()

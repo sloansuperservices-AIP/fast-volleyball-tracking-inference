@@ -32,6 +32,9 @@ def main():
     parser.add_argument("--visualize", action="store_true", 
                         help="Enable visualization on display using cv2")
     parser.add_argument("--only_csv", action="store_true", help="Only output CSV, no video")
+    parser.add_argument("--rotate", type=int, default=0, choices=[-90, 0, 90, 180, -180],
+                        help="Rotate frames before inference/output")
+    parser.add_argument("--device", type=str, default="CPU", help="Device for OpenVINO (CPU, GPU, AUTO)")
     
     # Hub specific arguments
     parser.add_argument("--hub_model", type=str, default="https://hub.ultralytics.com/models/ITKRtcQHITZrgT2ZNpRq",
@@ -83,6 +86,8 @@ def main():
             cmd.append("--visualize")
         if args.only_csv:
             cmd.append("--only_csv")
+        if args.rotate != 0:
+            cmd.extend(["--rotate", str(args.rotate)])
 
         print(f"Running ONNX tracking: {' '.join(cmd)}")
         return run_command(cmd)
@@ -95,11 +100,14 @@ def main():
         cmd = [python_exe, "src/inference_openvino_seq_gray_v2.py",
                "--video_path", args.video_path,
                "--model_xml", args.model_xml,
-               "--output_dir", args.output_dir]
+               "--output_dir", args.output_dir,
+               "--device", args.device]
         if args.visualize:
             cmd.append("--visualize")
         if args.only_csv:
             cmd.append("--only_csv")
+        if args.rotate != 0:
+            cmd.extend(["--rotate", str(args.rotate)])
             
         print(f"Running OpenVINO tracking: {' '.join(cmd)}")
         return run_command(cmd)
@@ -123,14 +131,17 @@ def main():
             return 1
             
     elif args.mode == "analyze":
-        if not args.csv_path:
-            print("Error: --csv_path is required for analyze mode")
+        if not args.csv_path or not args.court_json_path:
+            print("Error: --csv_path and --court_json_path are required for analyze mode")
             return 1
         
         cmd = [python_exe, "scripts/analyze_zone4_ball_trajectories.py",
-               "--csv-path", args.csv_path]
-        if args.court_json_path:
-            cmd.extend(["--court-json-path", args.court_json_path])
+               "--csv-path", args.csv_path,
+               "--court-json-path", args.court_json_path]
+        if args.video_path:
+            cmd.extend(["--video-path", args.video_path])
+        if args.visualize:
+            cmd.append("--visualize")
 
         print(f"Running analysis: {' '.join(cmd)}")
         return run_command(cmd)

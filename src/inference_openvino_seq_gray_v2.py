@@ -10,7 +10,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pandas as pd
-from openvino.runtime import Core
+try:
+    from openvino.runtime import Core
+except ImportError:
+    from openvino import Core
 from tqdm import tqdm
 
 
@@ -39,7 +42,7 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory")
     parser.add_argument("--visualize", action="store_true", help="Show visualization")
     parser.add_argument("--only_csv", action="store_true", help="Save only CSV")
-    parser.add_argument("--device", type=str, default="GPU", help="CPU, GPU, AUTO")
+    parser.add_argument("--device", type=str, default="CPU", help="CPU, GPU, AUTO")
     parser.add_argument("--threshold", type=float, default=0.5, help="Confidence threshold")
     parser.add_argument(
         "--rotate",
@@ -100,7 +103,7 @@ def load_model(model_path, device="CPU"):
 
     print(f"Original input shape: {pshape}")
     if pshape.is_dynamic:
-        print(f"Dynamic shape - fixing at {expected_shape}")
+        print(f"Dynamic shape - fixing to {expected_shape}")
         model.reshape({input_layer.any_name: expected_shape})
 
     compiled_model = core.compile_model(model=model, device_name=device)
@@ -118,7 +121,7 @@ def load_model(model_path, device="CPU"):
 def initialize_video(video_path):
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
-        raise ValueError(f"Cannot open video: {video_path}")
+        raise ValueError(f"Could not open video: {video_path}")
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
