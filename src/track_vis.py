@@ -11,7 +11,7 @@ from ball_tracker import BallTracker, Track
 from track_utils import find_cyclic_sequences, find_rolling_sequences
 
 class TrackAnalyzer:
-    """Class for analyzing tracks from CSV and visualization on video."""
+    """Class for analyzing tracks from CSV and visualizing on video."""
     def __init__(
         self,
         csv_path: str,
@@ -59,11 +59,11 @@ class TrackAnalyzer:
         }
         params_str = json.dumps(params, sort_keys=True)
         
-        # Hashing CSV file content
+        # Hash CSV file content
         with open(self.csv_path, "rb") as f:
             csv_hash = hashlib.md5(f.read()).hexdigest()
         
-        # Combining parameters and CSV hash
+        # Combine parameters and CSV hash
         combined = params_str + csv_hash
         return hashlib.md5(combined.encode()).hexdigest()
 
@@ -80,7 +80,7 @@ class TrackAnalyzer:
                     return cache[cache_key]
         except (pickle.UnpicklingError, EOFError, AttributeError, KeyError, ImportError) as e:
             print(f"⚠️  Error loading cache: {e}. Cache will be recreated.")
-            # Not returning data - forcing recalculation
+            # Do not return data - force recalculation
         return None
     
     def _save_cache(self, data: Dict) -> None:
@@ -94,10 +94,10 @@ class TrackAnalyzer:
                     if isinstance(loaded, dict):
                         cache = loaded
                     else:
-                        print("⚠️  Cache has incorrect format, will be recreated.")
+                        print("⚠️  Cache has invalid format, will be recreated.")
             except (EOFError, pickle.UnpicklingError, AttributeError, ValueError) as e:
                 print(f"⚠️  Error reading cache for writing: {e}. Cache will be recreated.")
-                # Leaving cache = {} - starting with a clean slate
+                # Leave cache = {} - start with a clean slate
 
         cache[self._get_cache_key()] = data
 
@@ -123,24 +123,24 @@ class TrackAnalyzer:
         return start1 <= end2 and start2 <= end1
     
     def _trim_bounce_start(self, track: Dict) -> Dict:
-        """Trims the beginning of the track, removing frames with ball movement up and down."""
+        """Trims track start, removing frames with ball bouncing movement."""
         if not track.positions:
             return track
         orig_start = track.start_frame
         orig_end = track.last_frame
         sequences = find_cyclic_sequences(track.positions)
         if sequences:
-            print("Found ball bouncing sequences:")
+            print("Ball bouncing sequences found:")
             for start, end in sequences:
                 print(f"Start: frame {start}, End: frame {end}")
                 track.start_frame = end
                 duration_frames = track.last_frame - track.start_frame + 1
                 track.duration_sec = lambda: duration_frames / self.fps
         else:
-            print("Ball bouncing sequences not found.")
+            print("No ball bouncing sequences found.")
         sequences = find_rolling_sequences(track.positions)
         if sequences:
-            print("Found ball rolling sequences:")
+            print("Ball rolling sequences found:")
             for start, end in sequences:
                 print(f"Start: frame {start}, End: frame {end}")
                 track.last_frame = start
@@ -178,7 +178,7 @@ class TrackAnalyzer:
                 if self._is_overlapping(track1, track2):
                     used_indices.add(j)
                     print(
-                        f"Track deleted {track2.track_id} (overlaps with track {track1.track_id})"
+                        f"Deleted track {track2.track_id} (overlaps with track {track1.track_id})"
                     )
         frames_to_extend = int(self.fps)
         extended_episodes = []
@@ -210,7 +210,7 @@ class TrackAnalyzer:
                     merged_track_ids.append(track2.track_id)
                     used_indices.add(j)
                     print(
-                        f"Track merged {track2.track_id} with track {merged_track.track_id}"
+                        f"Merged track {track2.track_id} with track {merged_track.track_id}"
                     )
             merged_track.positions = sorted(
                 merged_positions, key=lambda x: x[1]
@@ -295,10 +295,10 @@ class TrackAnalyzer:
                 f"{track.duration_sec():.2f}\t\t{track.size()}\t({distance_reason})"
             )
         if not self.tracks:
-            print("No tracks meeting the criteria.")
+            print("No tracks matching criteria.")
     
     def _save_tacks_to_file(self, track) -> None:
-        """Saves track to JSON file in a subdirectory corresponding to the video filename."""
+        """Saves track to JSON file in subdirectory corresponding to video filename."""
         video_name = os.path.splitext(os.path.basename(self.video_path))[0]
         file_path = f'track_json/{video_name}/track_{track.track_id:04d}.json'
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -380,7 +380,7 @@ class TrackAnalyzer:
         if self.output_path:
             print(f"Video saved: {self.output_path}")
         else:
-            print("Visualization completed")
+            print("Visualization complete")
     
     def run(self) -> None:
         self._validate_files()
@@ -391,7 +391,7 @@ class TrackAnalyzer:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Track analysis from CSV and visualization on video."
+        description="Analyze tracks from CSV and visualize on video."
     )
     parser.add_argument("--csv_path", type=str, required=True, help="Path to ball.csv")
     parser.add_argument("--video_path", type=str, required=True, help="Path to video")
@@ -399,7 +399,7 @@ def main():
         "--output_path",
         type=str,
         default=None,
-        help="Path for saving output video in AVI format",
+        help="Path to save output video in AVI format",
     )
     parser.add_argument(
         "--fps", type=float, default=30, help="Video FPS (default 30)"
@@ -420,19 +420,19 @@ def main():
         "--max_x_displacement",
         type=float,
         default=20.0,
-        help="Maximum X movement for overhead detection (pixels)",
+        help="Maximum X displacement to define rally (pixels)",
     )
     parser.add_argument(
         "--min_y_displacement",
         type=float,
         default=50.0,
-        help="Minimum Y movement for overhead detection (pixels)",
+        help="Minimum Y displacement to define rally (pixels)",
     )
     parser.add_argument(
         "--bounce_frames",
         type=int,
         default=10,
-        help="Number of frames for overhead analysis",
+        help="Number of frames for bounce analysis",
     )
     args = parser.parse_args()
     analyzer = TrackAnalyzer(
