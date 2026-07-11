@@ -5,11 +5,11 @@ import numpy as np
 def merge_sequences(
     sequences: list[tuple[int, int]], max_frame_gap: int = 10
 ) -> list[tuple[int, int]]:
-    """Merges cyclic sections if the distance between them does not exceed max_frame_gap frames.
+    """Merges cyclic segments if the distance between them does not exceed max_frame_gap frames.
 
     Args:
-        sequences: List of tuples (start_frame, end_frame) for cyclic sections.
-        max_frame_gap: Maximum distance between sections (in frames) for merging them.
+        sequences: List of tuples (start_frame, end_frame) for cyclic segments.
+        max_frame_gap: Maximum distance between segments (in frames) for merging.
 
     Returns:
         List of merged tuples (start_frame, end_frame).
@@ -17,21 +17,21 @@ def merge_sequences(
     if not sequences:
         return []
 
-    # Sorting by start
+    # Sort by start frame
     sequences = sorted(sequences, key=lambda x: x[0])
     merged = []
     current_start, current_end = sequences[0]
 
     for start, end in sequences[1:]:
         if start <= current_end + max_frame_gap:
-            # Sections overlap or are within max_frame_gap, updating end
+            # Segments overlap or are within max_frame_gap, update end frame
             current_end = max(current_end, end)
         else:
-            # New section, adding previous and starting new
+            # New segment, add previous and start new
             merged.append((current_start, current_end))
             current_start, current_end = start, end
 
-    # Adding the last merged section
+    # Add last merged segment
     merged.append((current_start, current_end))
     return merged
 
@@ -39,22 +39,22 @@ def merge_sequences(
 def find_cyclic_sequences(
     positions: list[list],
     min_cycle_amplitude: float = 30.0,  # Minimum amplitude of one cycle (range)
-    max_amplitude_variation: float = 50.0,  # Max amplitude variation between cycles
-    min_num_amplitudes: int = 4,  # Min number of amplitudes for a sequence (~2 cycles)
+    max_amplitude_variation: float = 50.0,  # Max amplitude difference between cycles
+    min_num_amplitudes: int = 4,  # Min number of amplitudes for sequence (~2 cycles)
 ) -> list[tuple[int, int]]:
-    """Finds sections with regular cyclic ball movements (≥2 cycles),
+    """Finds segments with regular cyclic ball movements (≥2 cycles),
     where oscillation amplitudes differ by no more than max_amplitude_variation.
-    Improved for detection of local stable cycles (e.g., ball bouncing before serving),
-    even if total amplitude variation is large - looking for subsequences.
+    Improved for local stable cycle detection (e.g., ball bouncing before serving),
+    even if the overall amplitude variation is large — looking for subsequences.
 
     Args:
         positions: List of positions in format [[x, y], frame].
-        min_cycle_amplitude: Minimum Y range to recognize cycles as significant.
+        min_cycle_amplitude: Minimum Y range to consider a cycle significant.
         max_amplitude_variation: Maximum difference between cycle amplitudes.
         min_num_amplitudes: Minimum number of consecutive amplitudes for a sequence.
 
     Returns:
-        List of tuples (start_frame, end_frame) for stable cyclic sections.
+        List of tuples (start_frame, end_frame) for stable cyclic segments.
     """
     if not positions or len(positions) < 10:
         return []
@@ -75,14 +75,14 @@ def find_cyclic_sequences(
         start_idx = i
         j = i + 1
 
-        # Looking for a section with small X change
+        # Look for segment with small X variation
         while j < n:
             x_range = np.max(x_values[i : j + 1]) - np.min(x_values[i : j + 1])
             if x_range > 150:
                 break
             j += 1
 
-        if j - i < 100:  # section too short
+        if j - i < 100:  # segment too short
             i = j
             continue
 
@@ -92,7 +92,7 @@ def find_cyclic_sequences(
             i = j
             continue
 
-        # Finding peaks and valleys
+        # Find peaks and troughs
         peaks, _ = find_peaks(y_segment, prominence=10)
         troughs, _ = find_peaks(-y_segment, prominence=10)
 
@@ -100,13 +100,13 @@ def find_cyclic_sequences(
             i = j
             continue
 
-        # Sorting events by index
+        # Sort events by index
         events = sorted(
             [(p, "peak") for p in peaks] + [(t, "trough") for t in troughs],
             key=lambda x: x[0],
         )
 
-        # Extracting amplitudes (all, no filter yet)
+        # Extract amplitudes
         amplitudes = []
         for k in range(1, len(events)):
             prev_idx, _ = events[k - 1]
@@ -118,7 +118,7 @@ def find_cyclic_sequences(
             i = j
             continue
 
-        # Step 1: Finding 'good' amplitude segments where all >= min_cycle_amplitude (no small transitions)
+        # Step 1: Find "good" amplitude segments where all >= min_cycle_amplitude
         good_segments = []
         amp_idx = 0
         while amp_idx < len(amplitudes):
@@ -132,7 +132,7 @@ def find_cyclic_sequences(
                 good_segments.append((amp_idx, amp_j))
             amp_idx = amp_j
 
-        # Step 2: For each good segment, looking for subsequences with similar amplitudes (range <= var)
+        # Step 2: For each good segment, look for subsequences with similar amplitudes (range <= var)
         for amp_start, amp_end in good_segments:
             left = amp_start
             for right in range(amp_start, amp_end):
@@ -146,16 +146,16 @@ def find_cyclic_sequences(
                         sub_min = min(sub)
                         sub_max = max(sub)
                 if right - left + 1 >= min_num_amplitudes:
-                    # Adding section (from event left to event right+1)
+                    # Add segment (from event left to event right+1)
                     event_left = events[left][0]
                     event_right = events[right + 1][0]
                     f_start = int(frames[i + event_left])
                     f_end = int(frames[i + event_right])
                     sequences.append((f_start, f_end))
-                    # Moving to the next non-overlapping
+                    # Move to next non-overlapping
                     left = right + 1
 
-        i = j  # moving to the next segment
+        i = j  # proceed to next segment
     sequences = merge_sequences(sequences)
 
     return sequences
@@ -163,11 +163,11 @@ def find_cyclic_sequences(
 
 def find_rolling_sequences(
     positions: list[list],
-    max_y_range: float = 40.0,  # Reduced for track 0005
+    max_y_range: float = 40.0,  # Decreased for track 0005
     min_x_range: float = 50.0,
-    min_length: int = 70,  # Reduced for short sections
+    min_length: int = 70,  # Decreased for short segments
 ) -> list[tuple[int, int]]:
-    """Finds sections where the ball is rolling on the floor (small Y range, large X range)."""
+    """Finds segments where the ball rolls on the floor (small Y range, large X range)."""
     if not positions or len(positions) < min_length:
         return []
 
