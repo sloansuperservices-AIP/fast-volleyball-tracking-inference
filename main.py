@@ -25,7 +25,7 @@ def main():
     parser.add_argument("--track_file", type=str, help="Path to track JSON file (for pose mode)")
     parser.add_argument("--model_path", type=str, default="models/VballNetV1_seq9_grayscale_330_h288_w512.onnx",
                         help="Path to ONNX model file")
-    parser.add_argument("--model_xml", type=str, default="ov/VballNetV2_seq9_grayscale_ov.xml",
+    parser.add_argument("--model_xml", type=str, default="ov/VballNetGridV1b_seq9_grayscale_20260510_183219.xml",
                         help="Path to OpenVINO XML file")
     parser.add_argument("--output_dir", type=str, default="output", 
                         help="Directory to save output files")
