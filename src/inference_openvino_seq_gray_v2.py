@@ -10,7 +10,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pandas as pd
-from openvino.runtime import Core
+try:
+    from openvino.runtime import Core
+except ImportError:
+    from openvino import Core
 from tqdm import tqdm
 
 

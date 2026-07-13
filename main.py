@@ -25,14 +25,17 @@ def main():
     parser.add_argument("--track_file", type=str, help="Path to track JSON file (for pose mode)")
     parser.add_argument("--model_path", type=str, default="models/VballNetV1_seq9_grayscale_330_h288_w512.onnx",
                         help="Path to ONNX model file")
-    parser.add_argument("--model_xml", type=str, default="ov/VballNetV2_seq9_grayscale_ov.xml",
+    parser.add_argument("--model_xml", type=str, default="ov/VballNetGridV1b_seq9_grayscale_20260510_183219.xml",
                         help="Path to OpenVINO XML file")
     parser.add_argument("--output_dir", type=str, default="output", 
                         help="Directory to save output files")
     parser.add_argument("--visualize", action="store_true", 
                         help="Enable visualization on display using cv2")
     parser.add_argument("--only_csv", action="store_true", help="Only output CSV, no video")
-    
+    parser.add_argument("--rotate", type=int, default=0, choices=[-90, 0, 90, 180, -180],
+                        help="Rotate frames: -90 (CCW), 90 (CW), 180 (upside down)")
+    parser.add_argument("--device", type=str, default="CPU", help="OpenVINO device (CPU, GPU, AUTO)")
+
     # Hub specific arguments
     parser.add_argument("--hub_model", type=str, default="https://hub.ultralytics.com/models/ITKRtcQHITZrgT2ZNpRq",
                         help="Ultralytics Hub model URL or ID")
@@ -78,7 +81,8 @@ def main():
         cmd = [python_exe, "src/inference_onnx_seq_gray_v2.py",
                "--video_path", args.video_path,
                "--model_path", args.model_path,
-               "--output_dir", args.output_dir]
+               "--output_dir", args.output_dir,
+               "--rotate", str(args.rotate)]
         if args.visualize:
             cmd.append("--visualize")
         if args.only_csv:
@@ -95,12 +99,14 @@ def main():
         cmd = [python_exe, "src/inference_openvino_seq_gray_v2.py",
                "--video_path", args.video_path,
                "--model_xml", args.model_xml,
-               "--output_dir", args.output_dir]
+               "--output_dir", args.output_dir,
+               "--rotate", str(args.rotate),
+               "--device", args.device]
         if args.visualize:
             cmd.append("--visualize")
         if args.only_csv:
             cmd.append("--only_csv")
-            
+
         print(f"Running OpenVINO tracking: {' '.join(cmd)}")
         return run_command(cmd)
 
