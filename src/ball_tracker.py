@@ -23,7 +23,7 @@ class Track:
     fps: float = 30.0
 
     def to_dict(self) -> Dict[str, Any]:
-        """Converts a Track object to a dictionary suitable for JSON serialization."""
+        """Converts Track object to a dictionary suitable for JSON serialization."""
 
         def convert_numpy(obj):
             """Converts numpy types to standard Python types."""
@@ -60,14 +60,14 @@ class Track:
         return sz / self.fps if self.fps > 0 else 0.0
 
     def get_x_range(self) -> float:
-        """Returns the difference between the maximum and minimum x value from positions history."""
+        """Returns the difference between the maximum and minimum x value from the positions history."""
         if not self.positions:
             return 0.0
         x_values = [pos[0][0] for pos in self.positions]
         return float(max(x_values) - min(x_values))
 
     def get_y_range(self) -> float:
-        """Returns the difference between the maximum and minimum y value from positions history."""
+        """Returns the difference between the maximum and minimum y value from the positions history."""
         if not self.positions:
             return 0.0
         y_values = [pos[0][1] for pos in self.positions]
