@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Main entry point for the fast volleyball tracking inference system.
+Consolidated orchestrator with support for ONNX, OpenVINO, Hub, and Analysis modes.
 """
 
 import argparse
@@ -23,15 +24,24 @@ def main():
                         default="track", help="Processing mode")
     parser.add_argument("--video_path", type=str, help="Path to input video file")
     parser.add_argument("--track_file", type=str, help="Path to track JSON file (for pose mode)")
-    parser.add_argument("--model_path", type=str, default="models/VballNetV1_seq9_grayscale_330_h288_w512.onnx",
+
+    # Stable models from the viewed ecosystem
+    parser.add_argument("--model_path", type=str,
+                        default="models/VballNetV1_seq9_grayscale_330_h288_w512.onnx",
                         help="Path to ONNX model file")
-    parser.add_argument("--model_xml", type=str, default="ov/VballNetV2_seq9_grayscale_ov.xml",
+    parser.add_argument("--model_xml", type=str,
+                        default="ov/VballNetV2_seq9_grayscale_ov.xml",
                         help="Path to OpenVINO XML file")
+
     parser.add_argument("--output_dir", type=str, default="output", 
                         help="Directory to save output files")
     parser.add_argument("--visualize", action="store_true", 
                         help="Enable visualization on display using cv2")
     parser.add_argument("--only_csv", action="store_true", help="Only output CSV, no video")
+    parser.add_argument("--rotate", type=int, default=0, choices=[0, 90, -90, 180],
+                        help="Rotate frames before inference: 90 (CW), -90 (CCW), 180 (Upside down)")
+    parser.add_argument("--device", type=str, default="CPU", choices=["CPU", "GPU", "AUTO"],
+                        help="Device for OpenVINO inference")
     
     # Hub specific arguments
     parser.add_argument("--hub_model", type=str, default="https://hub.ultralytics.com/models/ITKRtcQHITZrgT2ZNpRq",
@@ -83,6 +93,8 @@ def main():
             cmd.append("--visualize")
         if args.only_csv:
             cmd.append("--only_csv")
+        if args.rotate != 0:
+            cmd.extend(["--rotate", str(args.rotate)])
 
         print(f"Running ONNX tracking: {' '.join(cmd)}")
         return run_command(cmd)
@@ -95,11 +107,14 @@ def main():
         cmd = [python_exe, "src/inference_openvino_seq_gray_v2.py",
                "--video_path", args.video_path,
                "--model_xml", args.model_xml,
-               "--output_dir", args.output_dir]
+               "--output_dir", args.output_dir,
+               "--device", args.device]
         if args.visualize:
             cmd.append("--visualize")
         if args.only_csv:
             cmd.append("--only_csv")
+        if args.rotate != 0:
+            cmd.extend(["--rotate", str(args.rotate)])
             
         print(f"Running OpenVINO tracking: {' '.join(cmd)}")
         return run_command(cmd)

@@ -388,6 +388,7 @@ dependencies = [
     { name = "celery", extra = ["redis"] },
     { name = "ffmpeg-python" },
     { name = "filterpy" },
+    { name = "lion-pytorch" },
     { name = "matplotlib" },
     { name = "onnxruntime" },
     { name = "opencv-python-headless" },
@@ -421,6 +422,7 @@ requires-dist = [
     { name = "celery", extras = ["redis"], specifier = ">=5.5.3" },
     { name = "ffmpeg-python", specifier = ">=0.2.0" },
     { name = "filterpy", specifier = ">=1.4.5" },
+    { name = "lion-pytorch", specifier = ">=0.2.5" },
     { name = "matplotlib", specifier = ">=3.7.0" },
     { name = "matplotlib", marker = "extra == 'dev'", specifier = ">=3.9" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
@@ -737,6 +739,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/15/1f/dc6771a52592a4451be6effa200cbfc9cec61e4393d3033d81a9d307961d/librt-0.11.0-cp314-cp314t-win32.whl", hash = "sha256:2b481d846ac894c4e8403c5fd0e87c5d11d6499e404b474602508a224ff531c8", size = 103562, upload-time = "2026-05-10T18:17:03.99Z" },
     { url = "https://files.pythonhosted.org/packages/62/4a/7d1415567027286a75ba1093ec4aca11f073e0f559c530cf3e0a757ad55c/librt-0.11.0-cp314-cp314t-win_amd64.whl", hash = "sha256:28edb433edde181112a908c78907af28f964eabc15f4dd16c9d66c834302677c", size = 124327, upload-time = "2026-05-10T18:17:05.465Z" },
     { url = "https://files.pythonhosted.org/packages/ce/62/b40b382fa0c66fee1478073eb8db352a4a6beda4a1adccf1df911d8c289c/librt-0.11.0-cp314-cp314t-win_arm64.whl", hash = "sha256:dee008f20b542e3cd162ba338a7f9ec0f6d23d395f66fe8aeeec3c9d067ea253", size = 102572, upload-time = "2026-05-10T18:17:06.809Z" },
+]
+
+[[package]]
+name = "lion-pytorch"
+version = "0.2.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fb/bf/3bfaa6474a6b8991ef70219293d895a273b0438c1db001c427abf7d95480/lion_pytorch-0.2.5.tar.gz", hash = "sha256:fe8609a5a77fa8ba8399ac15921cb2cc041c2ef458d5522ff6eb143ec3e37e2d", size = 7832, upload-time = "2026-07-09T14:19:36.307Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a2/7a/c39e3ad6d7b71b47834a8f60378478d9a2e1812b66c5fb6158a41dc1b4b5/lion_pytorch-0.2.5-py3-none-any.whl", hash = "sha256:77089f28bda82f1cee829cabab8a104fe8aabf66af1941b0fc6ce400aabb28cc", size = 9965, upload-time = "2026-07-09T14:19:35.45Z" },
 ]
 
 [[package]]
